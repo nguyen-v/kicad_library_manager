@@ -31,7 +31,7 @@
             "linux"
           ],
           "download_url": "https://github.com/nguyen-v/kicad_library_manager/releases/download/v1.0.0/kicad-library-manager-1.0.0.zip",
-          "download_sha256": "b5ccdb0a47891077957703af6551544cef5b61ee5c4c01bf54b406067af974bd",
+          "download_sha256": "7ddb4d622b4d0ce4ab807fc298a1605a9463e1cc8c47422a66fb893068f3a3b2",
           "download_size": 286504,
           "install_size": 1040826
         }
