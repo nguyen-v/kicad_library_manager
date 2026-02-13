@@ -120,6 +120,7 @@ class _CategoryWizardDialog(wx.Dialog):
         title: str,
         cat_name: str = "",
         allow_rename: bool = True,
+        require_prefix: bool = False,
         prefix: str = "",
         width: int = 7,
         fields: list[dict] | None = None,
@@ -127,6 +128,7 @@ class _CategoryWizardDialog(wx.Dialog):
         super().__init__(parent, title=title, style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX)
         self._result: tuple[str, str, int, list[dict]] | None = None
         self._required_fields = {"IPN", "Symbol", "Footprint", "Value", "Description"}
+        self._require_prefix = bool(require_prefix)
 
         vbox = wx.BoxSizer(wx.VERTICAL)
 
@@ -390,6 +392,9 @@ class _CategoryWizardDialog(wx.Dialog):
 
         if not cat:
             wx.MessageBox("Category name is required.", "Edit category", wx.OK | wx.ICON_WARNING)
+            return
+        if self._require_prefix and not prefix_in:
+            wx.MessageBox("Prefix is required for a new category.", "Edit category", wx.OK | wx.ICON_WARNING)
             return
         if "/" in cat or "\\" in cat:
             wx.MessageBox("Category name must not contain slashes.", "Edit category", wx.OK | wx.ICON_WARNING)
@@ -944,7 +949,7 @@ class ManageCategoriesDialog(wx.Dialog):
         if not (cfg.github_owner.strip() and cfg.github_repo.strip()):
             wx.MessageBox("GitHub is not configured. Click Settings… first.", "KiCad Library Manager", wx.OK | wx.ICON_WARNING)
             return
-        wiz = _CategoryWizardDialog(self, title="New category", cat_name="", allow_rename=True, prefix="", width=7, fields=[])
+        wiz = _CategoryWizardDialog(self, title="New category", cat_name="", allow_rename=True, require_prefix=True, prefix="", width=7, fields=[])
         try:
             if wiz.ShowModal() != wx.ID_OK:
                 return

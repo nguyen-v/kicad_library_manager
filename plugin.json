@@ -1,6 +1,6 @@
 {
   "$schema": "https://go.kicad.org/api/schemas/v1",
-  "identifier": "com.kicad.library.manager",
+  "identifier": "com.github.nguyen-v.kicad-library-manager",
   "name": "KiCad Library Manager",
   "description": "GUI for managing a KiCad parts library repository",
   "runtime": {
@@ -18,7 +18,7 @@
       ],
       "entrypoint": "run_library_manager.py",
       "icons-light": [
-        "library_manager/logo.png"
+        "pcm/icon.png"
       ]
     }
   ]

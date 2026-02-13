@@ -1,0 +1,172 @@
+name: Build PCM Release + Update Pages (/docs)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE_IDENTIFIER: com.github.nguyen-v.kicad-library-manager
+  PACKAGE_NAME: KiCad Library Manager
+  PACKAGE_DESC: Manage a shared KiCad DBL parts library with requests/sync and previews.
+  PACKAGE_DESC_FULL: >-
+    An IPC plugin for KiCad that manages a shared database-backed library repo (sqlite/DBL) across multiple users.
+    Includes request submission via GitHub, repo sync helpers, browsing/editing parts, and bootstrap tools for a new DB repo.
+  AUTHOR_NAME: Vincent Nguyen
+  AUTHOR_WEB: https://github.com/nguyen-v/kicad_library_manager
+  LICENSE: GPL-3.0
+  KICAD_MIN: "9.0"
+  STATUS: stable
+  RUNTIME: ipc
+
+  # Change this later to your icon path
+  ICON_PATH: pcm/icon.png
+
+jobs:
+  build-release-and-pages:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout source (main)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set variables
+        id: vars
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VER="${TAG#v}"
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "ver=$VER" >> $GITHUB_OUTPUT
+          echo "asset=kicad-library-manager-${VER}.zip" >> $GITHUB_OUTPUT
+
+      - name: Build PCM stage directory
+        run: |
+          set -euxo pipefail
+          rm -rf dist stage
+          mkdir -p stage/plugins/kicad_library_manager stage/resources dist
+
+          # Copy plugin content into expected PCM layout
+          rsync -a --delete \
+            --exclude ".git/" \
+            --exclude ".github/" \
+            --exclude "dist/" \
+            --exclude "stage/" \
+            --exclude "docs/" \
+            --exclude "pcm/" \
+            ./ stage/plugins/kicad_library_manager/
+
+          # IPC requirement: plugin.json must exist inside a subdir under plugins/
+          test -f stage/plugins/kicad_library_manager/plugin.json
+
+          # Ensure the plugin action icon exists at the path referenced by plugin.json.
+          # (plugin.json references pcm/icon.png, but we exclude pcm/ from the plugin payload.)
+          mkdir -p stage/plugins/kicad_library_manager/pcm
+          cp "pcm/icon.png" stage/plugins/kicad_library_manager/pcm/icon.png
+
+          # Add optional icon inside ZIP as resources/icon.png (if exists)
+          if [ -f "${ICON_PATH}" ]; then
+            cp "${ICON_PATH}" stage/resources/icon.png
+          fi
+
+          # Create ZIP-root metadata.json by injecting version into template
+          python3 - << 'PY'
+          import json, os
+          ver = os.environ["VER"]
+          with open("pcm/metadata.in-zip.json", "r", encoding="utf-8") as f:
+            meta = json.load(f)
+          meta["versions"] = [{
+            "version": ver,
+            "status": os.environ.get("STATUS","stable"),
+            "kicad_version": os.environ.get("KICAD_MIN","9.0"),
+            "runtime": os.environ.get("RUNTIME","ipc"),
+            "platforms": ["windows", "macos", "linux"]
+          }]
+          with open("stage/metadata.json", "w", encoding="utf-8") as f:
+            json.dump(meta, f, indent=2, ensure_ascii=False)
+            f.write("\n")
+          PY
+        env:
+          VER: ${{ steps.vars.outputs.ver }}
+
+      - name: Create ZIP artifact
+        run: |
+          set -euxo pipefail
+          (cd stage && zip -r "../dist/${ASSET}" .)
+        env:
+          ASSET: ${{ steps.vars.outputs.asset }}
+
+      - name: Create/Update GitHub Release and upload asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ steps.vars.outputs.asset }}
+          generate_release_notes: true
+
+      - name: Ensure docs/ exists
+        run: |
+          mkdir -p docs
+
+      - name: Update PCM repository index into docs/
+        run: |
+          set -euxo pipefail
+          OWNER="${GITHUB_REPOSITORY_OWNER}"
+          REPO="$(basename "${GITHUB_REPOSITORY}")"
+          PAGES_BASE="https://${OWNER}.github.io/${REPO}"
+
+          ICON_SRC=""
+          if [ -f "${ICON_PATH}" ]; then
+            ICON_SRC="${ICON_PATH}"
+          fi
+
+          python3 pcm/update_repo_index.py \
+            --outdir docs \
+            --pages_base_url "${PAGES_BASE}" \
+            --zip_path "dist/${ASSET}" \
+            --tag "${TAG}" \
+            --version "${VER}" \
+            --asset_name "${ASSET}" \
+            --owner "${OWNER}" \
+            --repo "${REPO}" \
+            --pkg_identifier "${PACKAGE_IDENTIFIER}" \
+            --pkg_name "${PACKAGE_NAME}" \
+            --pkg_description "${PACKAGE_DESC}" \
+            --pkg_description_full "${PACKAGE_DESC_FULL}" \
+            --author_name "${AUTHOR_NAME}" \
+            --author_web "${AUTHOR_WEB}" \
+            --license "${LICENSE}" \
+            --kicad_min "${KICAD_MIN}" \
+            --status "${STATUS}" \
+            --runtime "${RUNTIME}" \
+            --icon_src "${ICON_SRC}" \
+            --icon_filename "icon.png"
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}
+          VER: ${{ steps.vars.outputs.ver }}
+          ASSET: ${{ steps.vars.outputs.asset }}
+
+      - name: Commit and push docs/ updates to main
+        run: |
+          set -euxo pipefail
+          # We run on a tag checkout; avoid committing tag-state history onto main.
+          # Stash generated docs, fast-forward main, then apply docs and commit.
+          rm -rf dist/docs_tmp
+          mkdir -p dist/docs_tmp
+          cp -a docs/. dist/docs_tmp/ || true
+
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          mkdir -p docs
+          cp -a dist/docs_tmp/. docs/ || true
+
+          git status
+          git add docs/repository.json docs/packages.json docs/icon.png || true
+          git -c user.name="github-actions" -c user.email="actions@github.com" commit -m "Update PCM index for ${TAG}" || true
+          git push origin main
+        env:
+          TAG: ${{ steps.vars.outputs.tag }}

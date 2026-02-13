@@ -1,4 +1,3 @@
-kicad-python
-rapidfuzz
-wxPython
-
+kicad-python>=0.1
+rapidfuzz>=3.0
+wxPython==4.2.1
