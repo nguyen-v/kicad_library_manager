@@ -66,6 +66,22 @@ If you created an empty repo for your database, click:
 
 ---
 
+### 3b) Configure KiCad libraries (DBL, symbols, footprints)
+
+This plugin manages a *KiCad database repo*, but KiCad still needs to be told about the libraries it should use.
+
+- **Add the database (DBL) as a Symbol Library**:
+  - KiCad → **Preferences → Manage Symbol Libraries…**
+  - Add a new library that points to your repo’s `Database/*.kicad_dbl` (KiCad “Database Library” / DBL).
+- **Add the dependent symbol + footprint libraries**:
+  - KiCad → **Preferences → Manage Symbol Libraries…**: add the repo’s symbol libraries under `Symbols/` (and any other symbol libraries your database rows reference).
+  - KiCad → **Preferences → Manage Footprint Libraries…**: add the repo’s footprint libraries under `Footprints/` (and any other footprint libraries your database rows reference).
+- **3D models are not generated**:
+  - The bundled footprint generator generates `.kicad_mod` footprints only. It does **not** create 3D models.
+  - If you want 3D models, add them externally (e.g. step/wrl files + set the 3D model references in KiCad).
+
+---
+
 ### 4) GitHub authentication (request submission)
 
 The plugin submits request files using the GitHub API. It looks for a token in this order:
