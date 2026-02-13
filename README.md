@@ -79,6 +79,9 @@ This plugin manages a *KiCad database repo*, but KiCad still needs to be told ab
 - **3D models are not generated**:
   - The bundled footprint generator generates `.kicad_mod` footprints only. It does **not** create 3D models.
   - If you want 3D models, add them externally (e.g. step/wrl files + set the 3D model references in KiCad).
+- **Footprint generator notes (IPC-7351 / solder goals)**:
+  - The footprint generator currently uses IPC-7351-style calculations with solder joint goals defined by PCB Libraries’ Footprint Expert tables to meet J-STD-001. See: [Solder Joint Goal Tables (Footprint Expert user guide)](https://www.pcblibraries.com/products/fpx/userguide/default.asp?ch=1.7)
+  - It is under active development; **not all package types shown in the dropdown are supported yet**.
 
 ---
 
