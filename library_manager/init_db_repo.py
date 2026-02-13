@@ -158,15 +158,19 @@ def commit_and_push_init(*, repo_path: str, commit_message: str, base_branch: st
     if not want_paths:
         return
 
-    # Ensure we are on a branch (submodules often sit in detached HEAD).
+    # Ensure we commit/push to the configured base branch.
+    # Even if the repo is currently on another branch, initialization should end up on `br`.
     try:
-        cur = run_git(["git", "-C", rp, "rev-parse", "--abbrev-ref", "HEAD"], cwd=rp).strip()
-    except Exception:
-        cur = ""
-    if cur == "HEAD":
-        # Best effort: get onto the base branch tracking origin/<base>.
+        # Best-effort: update origin/<br> if it exists.
         run_git(["git", "-C", rp, "fetch", "origin", br, "--quiet"], cwd=rp)
+    except Exception:
+        pass
+    try:
+        # Prefer tracking origin/<br> when available.
         run_git(["git", "-C", rp, "checkout", "-B", br, f"origin/{br}"], cwd=rp)
+    except Exception:
+        # Fall back to creating/resetting the branch locally.
+        run_git(["git", "-C", rp, "checkout", "-B", br], cwd=rp)
 
     add_args = ["git", "-C", rp, "add", "-A", "--"]
     add_args.extend(want_paths)
@@ -177,5 +181,5 @@ def commit_and_push_init(*, repo_path: str, commit_message: str, base_branch: st
         return
 
     run_git(["git", "-C", rp, "commit", "-m", msg], cwd=rp)
-    run_git(["git", "-C", rp, "push", "-u", "origin", "HEAD"], cwd=rp)
+    run_git(["git", "-C", rp, "push", "-u", "origin", br], cwd=rp)
 

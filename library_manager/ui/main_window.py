@@ -16,7 +16,7 @@ import wx.dataview as dv
 import wx.grid as gridlib
 
 from ..config import Config
-from ..repo import Category, list_categories
+from ..repo import Category, list_categories, is_repo_root
 from .async_ui import UiRepeater, WindowTaskRunner, is_window_alive
 from .browse_window import BrowseDialog
 from .dialogs import RepoSettingsDialog
@@ -50,13 +50,14 @@ from .assets.status import local_asset_paths
 
 
 class MainDialog(wx.Frame):
-    def __init__(self, parent: wx.Window | None, repo_path: str):
+    def __init__(self, parent: wx.Window | None, repo_path: str, project_path: str = ""):
         super().__init__(
             parent,
             title="KiCad Library Manager",
             style=wx.DEFAULT_FRAME_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
         )
         self._repo_path = repo_path
+        self._project_path = str(project_path or "")
         self._cfg = Config.load()
         self._categories: list[Category] = []
         self._tasks = WindowTaskRunner(self)
@@ -75,6 +76,9 @@ class MainDialog(wx.Frame):
         self._remote_poll_inflight = False
         self._remote_poll_repeater: UiRepeater | None = None
         self._asset_index_prefetch_started = False
+        # While a modal settings dialog is open, pause background UI activity
+        # so it can't steal focus or show message boxes behind the dialog.
+        self._modal_settings_open = False
 
         self._bmp_green = make_status_bitmap(wx.Colour(46, 160, 67))
         self._bmp_red = make_status_bitmap(wx.Colour(220, 53, 69))
@@ -83,6 +87,16 @@ class MainDialog(wx.Frame):
         self._bmp_gray = make_status_bitmap(wx.Colour(160, 160, 160))
 
         vbox = wx.BoxSizer(wx.VERTICAL)
+
+        # Setup banner shown when repo path is not initialized yet.
+        self._setup_mode = False
+        self._setup_banner = wx.StaticText(self, label="")
+        try:
+            self._setup_banner.SetForegroundColour(wx.Colour(220, 53, 69))
+        except Exception:
+            pass
+        self._setup_banner.Hide()
+        vbox.Add(self._setup_banner, 0, wx.LEFT | wx.RIGHT | wx.TOP | wx.EXPAND, 8)
 
         top = wx.BoxSizer(wx.HORIZONTAL)
         # Gray means "unknown/stale" until we fetch at least once.
@@ -191,13 +205,8 @@ class MainDialog(wx.Frame):
         self.SetMinSize((900, 650))
         self.SetSize((1200, 800))
 
-        self._refresh_sync_status()
-        self._refresh_assets_status()
-        self._refresh_remote_cat_updated_times_async()
-        self._reload_category_statuses()
-        self._refresh_categories_status_icon()
-        self._start_asset_index_prefetch_best_effort()
-        self._start_remote_polling()
+        # Initialize UI based on whether this repo looks initialized.
+        self._apply_repo_state()
         # IMPORTANT:
         # KiCad shutdown should always be able to terminate its process. Some KiCad/wx builds
         # issue veto-able close events during shutdown; if we veto those, KiCad can hang.
@@ -218,6 +227,159 @@ class MainDialog(wx.Frame):
         self._hist_rows: list[dict[str, str]] = []
         self._hist_for_path: str | None = None
         self._set_history_rows([])
+
+    def _repo_ready(self) -> tuple[bool, str]:
+        """
+        Return (ready, reason). "Ready" means we can safely run background git polling
+        and populate the UI without crashing/hanging during initial setup.
+        """
+        rp = str(getattr(self, "_repo_path", "") or "").strip()
+        if not rp:
+            return (False, "No local database path is set. Click Settings… to select a folder.")
+        if not os.path.isdir(rp):
+            return (False, f"Local database path does not exist:\n{rp}\n\nClick Settings… to select a folder.")
+        if not is_repo_root(rp):
+            return (
+                False,
+                "Selected folder is not initialized as a KiCad database repo yet.\n\n"
+                "Next step: click Settings… → Initialize database repo…",
+            )
+        # Require a git worktree too; most features assume git operations.
+        try:
+            run_git(["git", "rev-parse", "--is-inside-work-tree"], cwd=rp)
+        except Exception:
+            return (
+                False,
+                "Selected folder does not look like a git repository.\n\n"
+                "Initialize expects an existing git repo with an origin remote.",
+            )
+        return (True, "")
+
+    def _enter_setup_mode(self, reason: str) -> None:
+        if bool(getattr(self, "_setup_mode", False)):
+            try:
+                self._setup_banner.SetLabel(str(reason or ""))
+                self._setup_banner.Show()
+                self.Layout()
+            except Exception:
+                pass
+            return
+        self._setup_mode = True
+        # Stop background activity that can spam errors during setup.
+        try:
+            self._stop_remote_polling()
+        except Exception:
+            pass
+        try:
+            self._tasks.cancel_pending()
+        except Exception:
+            pass
+
+        try:
+            self._setup_banner.SetLabel(str(reason or ""))
+            self._setup_banner.Show()
+        except Exception:
+            pass
+
+        # Disable actions that assume a fully initialized repo.
+        for btn_name in (
+            "refresh_btn",
+            "sync_btn",
+            "categories_btn",
+            "create_fp_btn",
+            "browse_fp_btn",
+            "browse_sym_btn",
+        ):
+            try:
+                b = getattr(self, btn_name, None)
+                if b:
+                    b.Enable(False)
+            except Exception:
+                pass
+
+        # Clear/disable category/history views.
+        try:
+            self.cat_list.Freeze()
+        except Exception:
+            pass
+        try:
+            self.cat_list.DeleteAllItems()
+        except Exception:
+            pass
+        try:
+            self.cat_list.Thaw()
+        except Exception:
+            pass
+        try:
+            self._hist_title.SetLabel("History")
+        except Exception:
+            pass
+        try:
+            self._set_history_rows([])
+        except Exception:
+            pass
+
+        # Set neutral status text.
+        try:
+            self.sync_icon.SetBitmap(self._bmp_gray)
+            self.sync_label.SetLabel("Library status: not initialized")
+        except Exception:
+            pass
+        try:
+            self.assets_icon.SetBitmap(self._bmp_gray)
+            self.assets_label.SetLabel("Assets: unavailable until repository is initialized")
+        except Exception:
+            pass
+        try:
+            self.Layout()
+        except Exception:
+            pass
+
+    def _leave_setup_mode(self) -> None:
+        if not bool(getattr(self, "_setup_mode", False)):
+            return
+        self._setup_mode = False
+        try:
+            self._setup_banner.Hide()
+        except Exception:
+            pass
+        # Re-enable buttons.
+        for btn_name in (
+            "refresh_btn",
+            "sync_btn",
+            "categories_btn",
+            "create_fp_btn",
+            "browse_fp_btn",
+            "browse_sym_btn",
+        ):
+            try:
+                b = getattr(self, btn_name, None)
+                if b:
+                    b.Enable(True)
+            except Exception:
+                pass
+        try:
+            self.Layout()
+        except Exception:
+            pass
+
+    def _apply_repo_state(self) -> None:
+        """
+        Refresh UI + background loops depending on whether repo is initialized.
+        """
+        ready, reason = self._repo_ready()
+        if not ready:
+            self._enter_setup_mode(reason)
+            return
+
+        self._leave_setup_mode()
+        self._refresh_sync_status()
+        self._refresh_assets_status()
+        self._refresh_remote_cat_updated_times_async()
+        self._reload_category_statuses()
+        self._refresh_categories_status_icon()
+        self._start_asset_index_prefetch_best_effort()
+        self._start_remote_polling()
 
     def _set_button_bitmap(self, btn: wx.Button, bmp: wx.Bitmap | None) -> None:
         """
@@ -373,7 +535,9 @@ class MainDialog(wx.Frame):
     def _on_show_event(self, evt: wx.ShowEvent) -> None:
         try:
             if evt.IsShown():
-                self._start_remote_polling()
+                # Don't start polling while repo is in setup mode.
+                if not bool(getattr(self, "_setup_mode", False)):
+                    self._start_remote_polling()
             else:
                 self._stop_remote_polling()
         finally:
@@ -389,6 +553,8 @@ class MainDialog(wx.Frame):
         - if SHA changed, trigger a full `git fetch origin main`
         - backoff exponentially on errors up to 60s
         """
+        if bool(getattr(self, "_setup_mode", False)) or bool(getattr(self, "_modal_settings_open", False)):
+            return
         if not is_window_alive(self):
             return
         try:
@@ -415,6 +581,8 @@ class MainDialog(wx.Frame):
         def done(sha: str | None, err: Exception | None) -> None:
             self._remote_poll_inflight = False
             if not is_window_alive(self):
+                return
+            if bool(getattr(self, "_modal_settings_open", False)):
                 return
             if err or not sha:
                 try:
@@ -1122,8 +1290,18 @@ class MainDialog(wx.Frame):
         self._tasks.run(work, done)
 
     def _on_settings(self, _evt: wx.CommandEvent) -> None:
+        # Pause background polling while settings are open to avoid re-entrancy
+        # and focus-stealing dialogs being shown behind this modal.
         try:
-            dlg = RepoSettingsDialog(self, self._cfg, repo_path=self._repo_path)
+            self._modal_settings_open = True
+        except Exception:
+            pass
+        try:
+            self._stop_remote_polling()
+        except Exception:
+            pass
+        try:
+            dlg = RepoSettingsDialog(self, self._cfg, repo_path=self._repo_path, project_path=self._project_path)
         except Exception as exc:  # noqa: BLE001
             tb = traceback.format_exc()
             try:
@@ -1162,18 +1340,37 @@ class MainDialog(wx.Frame):
                 dlg.Destroy()
             except Exception:
                 pass
+            try:
+                self._modal_settings_open = False
+            except Exception:
+                pass
+            # Resume polling if appropriate.
+            try:
+                if self.IsShown() and not bool(getattr(self, "_setup_mode", False)):
+                    self._start_remote_polling()
+            except Exception:
+                pass
         if res == wx.ID_OK:
             # Settings may affect origin URL/branch; refresh UI immediately.
             try:
                 self._cfg = Config.load()
             except Exception:
                 pass
+            # If user changed local database path, switch this window to it immediately.
             try:
-                self._refresh_sync_status()
-                self._refresh_assets_status()
-                self._reload_category_statuses()
-                self._refresh_remote_cat_updated_times_async()
-                self._refresh_categories_status_icon()
+                new_rp = str(getattr(self._cfg, "repo_path", "") or "").strip()
+            except Exception:
+                new_rp = ""
+            if new_rp and new_rp != str(getattr(self, "_repo_path", "") or "").strip():
+                self._repo_path = new_rp
+                # Reset remote SHA so polling will re-check against the new repo.
+                try:
+                    self._last_remote_sha = None
+                except Exception:
+                    pass
+            # Re-evaluate whether repo is initialized; avoid crashes/freezes while setting up.
+            try:
+                self._apply_repo_state()
             except Exception:
                 pass
 

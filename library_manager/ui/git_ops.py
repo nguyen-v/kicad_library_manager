@@ -386,14 +386,18 @@ def git_commit_and_push_assets(repo_path: str, *, commit_message: str, prefixes:
         return "No local symbol/footprint changes to publish."
 
     br = (branch or "").strip() or "main"
-    # Ensure we are on a branch (submodules often sit in detached HEAD).
+    # Strategy (important for CI-generated commits and request workflows):
+    # - Stage + commit assets locally (working tree is dirty so we cannot merge/switch freely).
+    # - Fetch origin/<br>.
+    # - Rebase our asset commit(s) onto origin/<br> to avoid "diverged, cannot ff-only".
+    # - Push to the configured branch.
+    #
+    # This keeps history linear without relying on user git config.
     try:
-        cur = run_git(["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path).strip()
-    except Exception:
-        cur = ""
-    if cur == "HEAD":
         run_git(["git", "-C", repo_path, "fetch", "origin", br, "--quiet"], cwd=repo_path)
-        run_git(["git", "-C", repo_path, "checkout", "-B", br, f"origin/{br}"], cwd=repo_path)
+    except Exception:
+        # Remote may not exist or may be unreachable; commit still useful locally.
+        pass
 
     add_args = ["git", "-C", repo_path, "add", "-A", "--"]
     add_args.extend(prefixes)
@@ -408,7 +412,23 @@ def git_commit_and_push_assets(repo_path: str, *, commit_message: str, prefixes:
         return "No staged symbol/footprint changes to commit."
 
     run_git(["git", "-C", repo_path, "commit", "-m", str(commit_message or "").strip() or "assets: update"], cwd=repo_path)
-    run_git(["git", "-C", repo_path, "push", "-u", "origin", "HEAD"], cwd=repo_path)
+    # Ensure we are based on latest origin/<br> before pushing.
+    try:
+        run_git(["git", "-C", repo_path, "fetch", "origin", br, "--quiet"], cwd=repo_path)
+    except Exception as exc:
+        raise RuntimeError(f"Could not fetch origin/{br} before pushing assets:\n{exc}") from exc
+    try:
+        # Non-interactive rebase; will raise on conflicts.
+        run_git(["git", "-C", repo_path, "rebase", f"origin/{br}"], cwd=repo_path)
+    except Exception as exc:
+        raise RuntimeError(
+            "Assets commit could not be rebased onto the latest remote branch.\n\n"
+            f"Fix (manual):\n- cd {repo_path}\n- git fetch origin {br}\n- git rebase origin/{br}\n"
+            "- resolve any conflicts, then run Sync again.\n\n"
+            f"Error:\n{exc}"
+        ) from exc
+    # Push our current HEAD to the configured branch explicitly.
+    run_git(["git", "-C", repo_path, "push", "-u", "origin", f"HEAD:{br}"], cwd=repo_path)
 
     short = "\n".join([f"- {p}" for p in changed[:30]])
     if len(changed) > 30:
@@ -517,6 +537,23 @@ def git_sync_ff_only(repo_path: str, *, branch: str) -> str:
     br = (branch or "").strip() or "main"
     # Always fetch first to update origin/<branch>.
     run_git(["git", "-C", repo_path, "fetch", "origin", br, "--quiet"], cwd=repo_path)
+    # Ensure we are operating on the configured branch.
+    # This avoids ff-only failures when the worktree is on another branch (or detached HEAD),
+    # which is common for submodules and can also happen after other tooling.
+    try:
+        cur = run_git(["git", "-C", repo_path, "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_path).strip()
+    except Exception:
+        cur = ""
+    if cur != br:
+        try:
+            # If branch exists locally, just switch to it.
+            run_git(["git", "-C", repo_path, "checkout", br], cwd=repo_path)
+        except Exception:
+            # Otherwise create/reset it to track origin/<br> if available.
+            try:
+                run_git(["git", "-C", repo_path, "checkout", "-B", br, f"origin/{br}"], cwd=repo_path)
+            except Exception:
+                run_git(["git", "-C", repo_path, "checkout", "-B", br], cwd=repo_path)
     # Then fast-forward only to the remote tracking ref.
     out = run_git(["git", "-C", repo_path, "merge", "--ff-only", f"origin/{br}"], cwd=repo_path)
     return out or "Already up to date."

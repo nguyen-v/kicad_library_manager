@@ -6,6 +6,7 @@ import wx
 
 from ..config import Config
 from ..repo import Category
+from ..repo import is_repo_root
 from .async_ui import is_window_alive
 from .services import validate_row
 from .widgets import ComponentFormPanel
@@ -16,18 +17,26 @@ class RepoSettingsDialog(wx.Dialog):
     Small, focused settings dialog.
     """
 
-    def __init__(self, parent: wx.Window, cfg: Config, repo_path: str = ""):
+    def __init__(self, parent: wx.Window, cfg: Config, repo_path: str = "", project_path: str = ""):
         super().__init__(parent, title="Repository settings", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self._cfg = cfg
         self._repo_path = repo_path
+        self._project_path = project_path
 
         root = wx.BoxSizer(wx.VERTICAL)
         grid = wx.FlexGridSizer(cols=2, vgap=8, hgap=10)
         grid.AddGrowableCol(1, 1)
 
         grid.Add(wx.StaticText(self, label="Local database path"), 0, wx.ALIGN_CENTER_VERTICAL)
-        self.repo = wx.TextCtrl(self, value=repo_path or cfg.repo_path, style=wx.TE_READONLY)
-        grid.Add(self.repo, 1, wx.EXPAND)
+        # Row: [path text] [Browse...]
+        repo_row = wx.BoxSizer(wx.HORIZONTAL)
+        self.repo = wx.TextCtrl(self, value=repo_path or cfg.repo_path)
+        repo_row.Add(self.repo, 1, wx.EXPAND)
+        repo_row.AddSpacer(8)
+        browse_btn = wx.Button(self, label="Browse…")
+        browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_repo)
+        repo_row.Add(browse_btn, 0)
+        grid.Add(repo_row, 1, wx.EXPAND)
 
         grid.Add(wx.StaticText(self, label="Remote database URL"), 0, wx.ALIGN_CENTER_VERTICAL)
         # Prefer the single-field URL; fall back to reconstructing from legacy fields.
@@ -86,6 +95,81 @@ class RepoSettingsDialog(wx.Dialog):
 
         self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
 
+    def _on_browse_repo(self, _evt: wx.CommandEvent) -> None:
+        """
+        Pick a local repo folder.
+        """
+        # Prefer the KiCad project directory (or its Libraries/ folder) so users
+        # working with per-project submodules don't jump to some global repo.
+        start = ""
+        try:
+            proj = str(getattr(self, "_project_path", "") or "").strip()
+        except Exception:
+            proj = ""
+        if proj and os.path.isdir(proj):
+            libs = os.path.join(proj, "Libraries")
+            start = libs if os.path.isdir(libs) else proj
+        if not start:
+            # Fall back to the currently selected repo path (if any).
+            start = (self.repo.GetValue() or "").strip() or str(self._repo_path or "").strip() or str(self._cfg.repo_path or "").strip()
+        if start and not os.path.isdir(start):
+            start = ""
+        if not start:
+            try:
+                start = os.getcwd()
+            except Exception:
+                start = ""
+
+        dlg = wx.DirDialog(
+            self,
+            message="Select local database repo folder",
+            defaultPath=start,
+            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST,
+        )
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            picked = str(dlg.GetPath() or "").strip()
+        finally:
+            try:
+                dlg.Destroy()
+            except Exception:
+                pass
+
+        if not picked:
+            return
+
+        self._repo_path = picked
+        try:
+            self.repo.SetValue(picked)
+        except Exception:
+            pass
+
+        # Best-effort: if this looks like a database repo, auto-guess DBL filename.
+        try:
+            cands = sorted(glob.glob(os.path.join(picked, "Database", "*.kicad_dbl")))
+            if len(cands) == 1:
+                self.dbl.SetValue(os.path.basename(cands[0]))
+        except Exception:
+            pass
+
+        # Friendly warning if structure doesn't match yet (still allow init flow).
+        try:
+            if not is_repo_root(picked):
+                wx.MessageBox(
+                    "Selected folder does not look like a KiCad database repo yet.\n\n"
+                    "Expected to find:\n"
+                    "- Database/ (with categories.yml or a *.kicad_dbl)\n"
+                    "- Symbols/\n"
+                    "- Footprints/\n\n"
+                    "You can still click “Initialize database repo…” to scaffold missing files.",
+                    "Repository settings",
+                    wx.OK | wx.ICON_INFORMATION,
+                    parent=self,
+                )
+        except Exception:
+            pass
+
     def _apply_remote_url_best_effort(self, *, repo_path: str, url: str) -> None:
         # Best-effort: apply the remote URL to the local repo's "origin" remote so the
         # rest of the UI (fetch, ls-remote, origin/<branch> comparisons) uses it.
@@ -103,7 +187,10 @@ class RepoSettingsDialog(wx.Dialog):
             run_git(["git", "remote", "add", "origin", remote], cwd=rp)
 
     def _on_ok(self, _evt: wx.CommandEvent) -> None:
-        self._cfg.repo_path = self._repo_path or self._cfg.repo_path
+        rp = (self.repo.GetValue() or "").strip()
+        if rp:
+            self._repo_path = rp
+            self._cfg.repo_path = rp
         url = (self.remote_url.GetValue() or "").strip()
         self._cfg.remote_db_url = url
         owner, repo, branch_from_url = Config.parse_remote_db_url(url)
@@ -123,13 +210,13 @@ class RepoSettingsDialog(wx.Dialog):
         try:
             self._cfg.save()
         except Exception as exc:  # noqa: BLE001
-            wx.MessageBox(f"Could not save settings:\n{exc}", "Repository settings", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Could not save settings:\n{exc}", "Repository settings", wx.OK | wx.ICON_ERROR, parent=self)
             return
 
         try:
             self._apply_remote_url_best_effort(repo_path=str(self._cfg.repo_path or ""), url=url)
         except Exception as exc:  # noqa: BLE001
-            wx.MessageBox(f"Could not apply remote URL to this repo:\n\n{exc}", "Repository settings", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox(f"Could not apply remote URL to this repo:\n\n{exc}", "Repository settings", wx.OK | wx.ICON_WARNING, parent=self)
         self.EndModal(wx.ID_OK)
 
     def _on_init_repo(self, _evt: wx.CommandEvent) -> None:
@@ -141,7 +228,7 @@ class RepoSettingsDialog(wx.Dialog):
 
         repo_path = str(self._repo_path or self._cfg.repo_path or "").strip()
         if not repo_path:
-            wx.MessageBox("Local database path is not set.", "Initialize database repo", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("Local database path is not set.", "Initialize database repo", wx.OK | wx.ICON_WARNING, parent=self)
             return
 
         url = (self.remote_url.GetValue() or "").strip()
@@ -158,14 +245,14 @@ class RepoSettingsDialog(wx.Dialog):
         try:
             ensure_git_clean_and_origin(repo_path)
         except Exception as exc:  # noqa: BLE001
-            wx.MessageBox(str(exc), "Initialize database repo", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox(str(exc), "Initialize database repo", wx.OK | wx.ICON_WARNING, parent=self)
             return
 
         # Determine what would be created (missing only).
         try:
             actions = compute_init_actions(repo_path=repo_path, base_branch=branch, dbl_filename=dbl)
         except Exception as exc:  # noqa: BLE001
-            wx.MessageBox(f"Could not compute initialization actions:\n\n{exc}", "Initialize database repo", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Could not compute initialization actions:\n\n{exc}", "Initialize database repo", wx.OK | wx.ICON_ERROR, parent=self)
             return
 
         missing: list[str] = []
@@ -177,7 +264,7 @@ class RepoSettingsDialog(wx.Dialog):
             else:
                 missing.append(rel)
         if not missing:
-            wx.MessageBox("Nothing to initialize (all scaffold files already exist).", "Initialize database repo", wx.OK | wx.ICON_INFORMATION)
+            wx.MessageBox("Nothing to initialize (all scaffold files already exist).", "Initialize database repo", wx.OK | wx.ICON_INFORMATION, parent=self)
             return
 
         default_msg = "chore: initialize database repo scaffolding"
@@ -192,7 +279,7 @@ class RepoSettingsDialog(wx.Dialog):
         try:
             res = init_repo_create_missing_only(repo_path=repo_path, base_branch=branch, dbl_filename=dbl)
         except Exception as exc:  # noqa: BLE001
-            wx.MessageBox(f"Initialization failed:\n\n{exc}", "Initialize database repo", wx.OK | wx.ICON_ERROR)
+            wx.MessageBox(f"Initialization failed:\n\n{exc}", "Initialize database repo", wx.OK | wx.ICON_ERROR, parent=self)
             return
 
         try:
@@ -203,13 +290,14 @@ class RepoSettingsDialog(wx.Dialog):
                 paths=list(res.created or []),
             )
         except Exception as exc:  # noqa: BLE001
-            wx.MessageBox(f"Created scaffold files but could not commit/push:\n\n{exc}", "Initialize database repo", wx.OK | wx.ICON_WARNING)
+            wx.MessageBox(f"Created scaffold files but could not commit/push:\n\n{exc}", "Initialize database repo", wx.OK | wx.ICON_WARNING, parent=self)
             return
 
         wx.MessageBox(
             f"Initialized repository.\n\nCreated {len(res.created)} file(s).\nSkipped {len(res.skipped_existing)} existing file(s).",
             "Initialize database repo",
             wx.OK | wx.ICON_INFORMATION,
+            parent=self,
         )
 
         # Notify owner window to refresh status (best effort).
@@ -429,7 +517,7 @@ class ComponentDialogBase(wx.Dialog):
             existing_rows=self._existing_rows,
         )
         if errs:
-            wx.MessageBox("\n".join(errs), self.GetTitle(), wx.OK | wx.ICON_WARNING)
+            wx.MessageBox("\n".join(errs), self.GetTitle(), wx.OK | wx.ICON_WARNING, parent=self)
             return
         self._result_row = row
         self.EndModal(wx.ID_OK)

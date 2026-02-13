@@ -155,6 +155,7 @@ def main() -> int:
 
     # Resolve project path from the running pcbnew instance via IPC.
     repo_path: str | None = None
+    project_dir: str = ""
     try:
         kicad = kipy.KiCad(timeout_ms=4000)
         board = kicad.get_board()
@@ -167,6 +168,14 @@ def main() -> int:
             return 1
         project = board.get_project()
         start_path = getattr(project, "path", None) or getattr(board, "name", None) or ""
+        try:
+            sp = str(start_path or "")
+            if sp and os.path.isfile(sp):
+                project_dir = os.path.dirname(sp)
+            elif sp and os.path.isdir(sp):
+                project_dir = sp
+        except Exception:
+            project_dir = ""
         repo_path = find_repo_root_from_project(str(start_path))
         if not repo_path:
             # Try settings path first.
@@ -205,22 +214,12 @@ def main() -> int:
         return 1
 
     if not repo_path:
-        _boot_log("repo_path not found; showing warning")
-        wx.MessageBox(
-            "Could not auto-discover the local database repo.\n\n"
-            "Tried:\n"
-            "- project layout under `<project>/Libraries/...`\n"
-            "- walking up from the project path, current working directory, and plugin location\n"
-            "  looking for `Database/categories.yml` (or any `Database/*.kicad_dbl`) plus `Footprints/` and `Symbols/`.\n\n"
-            "Fix:\n"
-            "- Open Settings… and set the Local database path, or\n"
-            "- Add the repo as a submodule under your project `Libraries/` folder.",
-            "KiCad Library Manager",
-            wx.OK | wx.ICON_WARNING,
-        )
-        return 1
+        # Do NOT abort: users must be able to open Settings and initialize a new library.
+        # The main window handles empty/invalid repo paths via "setup mode".
+        _boot_log("repo_path not found; opening UI in setup mode")
+        repo_path = ""
 
-    frm = MainDialog(None, repo_path)
+    frm = MainDialog(None, str(repo_path or ""), project_path=project_dir)
     app.SetTopWindow(frm)
     frm.Show()
     app.MainLoop()

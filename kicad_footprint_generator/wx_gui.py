@@ -760,15 +760,53 @@ class FootprintGeneratorDialog(wx.Frame):
                     self.kind.SetStringSelection(last_kind)
                 except Exception:
                     pass
-            # If there's a global out_dir, preselect it (useful when most kinds share same library).
-            out_dir = g.get("out_dir")
-            if out_dir and isinstance(out_dir, str):
-                self._set_out_dir_best_effort(out_dir)
+            # Prevent cross-project leakage:
+            # - Prefer an out_dir saved for THIS repo_path (stable for per-project submodules)
+            # - Otherwise, only restore the global out_dir if it belongs to this repo's Footprints/
+            out_dir = ""
+            try:
+                repo_key = os.path.abspath(str(getattr(self, "_repo_path", "") or "").strip())
+            except Exception:
+                repo_key = ""
+            try:
+                by_repo = g.get("out_dir_by_repo")
+                if repo_key and isinstance(by_repo, dict):
+                    cand = by_repo.get(repo_key)
+                    if isinstance(cand, str) and cand.strip():
+                        out_dir = cand.strip()
+            except Exception:
+                out_dir = ""
+            if not out_dir:
+                cand2 = g.get("out_dir")
+                if isinstance(cand2, str) and cand2.strip():
+                    out_dir = cand2.strip()
+            if out_dir:
+                self._set_out_dir_best_effort(out_dir, allow_external=False)
         finally:
             self._restoring = False
 
-    def _set_out_dir_best_effort(self, out_dir: str) -> None:
+    def _out_dir_belongs_to_this_repo(self, out_dir: str) -> bool:
+        """
+        True if out_dir is within this repo's Footprints/ folder.
+        """
+        p = str(out_dir or "").strip()
+        if not p:
+            return False
+        try:
+            root = os.path.abspath(str(getattr(self, "_fp_root", "") or "").strip())
+            ap = os.path.abspath(p)
+            if not (root and ap):
+                return False
+            # commonpath raises on different drives (Windows).
+            return os.path.commonpath([ap, root]) == root
+        except Exception:
+            return False
+
+    def _set_out_dir_best_effort(self, out_dir: str, *, allow_external: bool = True) -> None:
         if not out_dir:
+            return
+        if not allow_external and not self._out_dir_belongs_to_this_repo(out_dir):
+            # Ignore persisted out_dir from another project/repo.
             return
         # Ensure choice list has an entry for this directory.
         label = os.path.basename(out_dir.rstrip(os.sep)) or out_dir
@@ -802,7 +840,7 @@ class FootprintGeneratorDialog(wx.Frame):
 
             out_dir = ks.get("out_dir")
             if isinstance(out_dir, str) and out_dir:
-                self._set_out_dir_best_effort(out_dir)
+                self._set_out_dir_best_effort(out_dir, allow_external=False)
 
             # Restore dynamic fields
             vals = ks.get("fields", {})
@@ -858,6 +896,20 @@ class FootprintGeneratorDialog(wx.Frame):
                 g["last_kind"] = self.kind.GetStringSelection() or kind
                 if out_dir:
                     g["out_dir"] = out_dir
+                    # Also persist per-repo so switching projects doesn't leak across repos.
+                    try:
+                        repo_key = os.path.abspath(str(getattr(self, "_repo_path", "") or "").strip())
+                    except Exception:
+                        repo_key = ""
+                    if repo_key:
+                        try:
+                            m = g.get("out_dir_by_repo")
+                            if not isinstance(m, dict):
+                                m = {}
+                                g["out_dir_by_repo"] = m
+                            m[repo_key] = out_dir
+                        except Exception:
+                            pass
             else:
                 self._state["global"] = {"last_kind": (self.kind.GetStringSelection() or kind), "out_dir": out_dir}
 
