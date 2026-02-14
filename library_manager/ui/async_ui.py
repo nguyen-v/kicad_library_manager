@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import threading
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 import wx
 
 
-ResultHandler = Callable[[Any, Exception | None], None]
+ResultHandler = Callable[[Any, Optional[Exception]], None]
 
 
 def is_window_alive(win: wx.Window | None) -> bool:

@@ -8,7 +8,7 @@ KiCad (wxPython) and also by any future CLI / tests.
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from .generate import DEFAULT_SETTINGS, build_pattern
 
@@ -53,7 +53,7 @@ KINDS: List[str] = [
 ]
 
 
-FieldSpec = Tuple[str, str, Any, List[Any] | None]
+FieldSpec = Tuple[str, str, Any, Optional[List[Any]]]
 # (label, path, default, choices?)
 
 
