@@ -48,6 +48,12 @@ def make_library_entry(table: str, headers: list[str]) -> dict:
     name = table.replace("_", " ")
     fields = []
     for h in headers:
+        # KiCad DBL has dedicated "symbols"/"footprints" mappings. Including these columns
+        # again in the generic "fields" list can cause odd UI behavior, e.g. when the
+        # Footprint column contains multiple refs separated by semicolons:
+        # KiCad may show A;B;C as an extra "footprint" choice alongside A, B, C.
+        if h in {"Symbol", "Footprint"}:
+            continue
         fields.append(
             {
                 "column": h,
@@ -116,11 +122,14 @@ def _fields_for_table(repo: str, table: str, headers: list[str]) -> list[dict]:
                 "show_name": False,
             }
             for h in headers
+            if h not in {"Symbol", "Footprint"}
         ]
     # Ensure it contains all headers (append missing with defaults)
     by_col = {f.get("column"): f for f in cfg if isinstance(f, dict)}
     out = []
     for h in headers:
+        if h in {"Symbol", "Footprint"}:
+            continue
         if h in by_col:
             out.append(by_col[h])
         else:

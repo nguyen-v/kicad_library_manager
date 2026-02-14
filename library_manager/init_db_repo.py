@@ -12,6 +12,13 @@ class InitResult:
     skipped_existing: list[str]
 
 
+@dataclass(frozen=True)
+class UpdateResult:
+    created: list[str]
+    updated: list[str]
+    skipped_same: list[str]
+
+
 def _scaffold_root() -> str:
     here = os.path.abspath(os.path.dirname(__file__))
     return os.path.join(here, "scaffold", "db_repo")
@@ -117,6 +124,72 @@ def compute_init_actions(*, repo_path: str, base_branch: str, dbl_filename: str)
     for rel, txt in out:
         fixed.append((str(rel).replace("\\", "/"), str(txt)))
     return fixed
+
+
+def compute_update_actions(*, repo_path: str, base_branch: str) -> list[tuple[str, str]]:
+    """
+    Return (repo_relative_path, file_text) for scaffold-managed *tooling* files.
+
+    Unlike initialization, this is intended to be safe to apply to existing databases:
+    - updates only workflows + tools shipped by this plugin
+    - does NOT touch user data files (Database/db-*.csv, categories.yml, parts.sqlite, etc.)
+    """
+    rp = os.path.abspath(str(repo_path or "").strip())
+    br = (base_branch or "").strip() or "main"
+    if not rp:
+        return []
+    root = _scaffold_root()
+    out: list[tuple[str, str]] = []
+
+    def add_from_template(rel: str, *, replace_branch: bool = False) -> None:
+        src = os.path.join(root, rel)
+        txt = _read_text(src)
+        if replace_branch:
+            txt = txt.replace("__BASE_BRANCH__", br)
+        out.append((rel, txt))
+
+    # Only the "scaffold-managed" automation files.
+    add_from_template(".github/workflows/build_db.yml", replace_branch=True)
+    add_from_template(".github/workflows/assign_ipn.yml", replace_branch=False)
+    add_from_template("tools/process_requests.py", replace_branch=False)
+    add_from_template("tools/assign_ipn.py", replace_branch=False)
+    add_from_template("tools/update_dbl.py", replace_branch=False)
+    add_from_template("tools/build_sqlite.py", replace_branch=False)
+
+    return [(str(rel).replace("\\", "/"), str(txt)) for rel, txt in out]
+
+
+def update_repo_scaffold_tools(*, repo_path: str, base_branch: str) -> UpdateResult:
+    """
+    Apply scaffold-managed tooling updates into an existing repo.
+
+    Overwrites files only when content differs. Creates missing files.
+    """
+    rp = os.path.abspath(str(repo_path or "").strip())
+    if not rp:
+        raise RuntimeError("Missing repo_path")
+    actions = compute_update_actions(repo_path=rp, base_branch=base_branch)
+    created: list[str] = []
+    updated: list[str] = []
+    skipped_same: list[str] = []
+
+    for rel, txt in actions:
+        ap = os.path.join(rp, rel)
+        if os.path.exists(ap):
+            try:
+                cur = _read_text(ap)
+            except Exception:
+                cur = None
+            if cur == txt:
+                skipped_same.append(rel)
+                continue
+            _write_text(ap, txt)
+            updated.append(rel)
+        else:
+            _write_text(ap, txt)
+            created.append(rel)
+
+    return UpdateResult(created=created, updated=updated, skipped_same=skipped_same)
 
 
 def init_repo_create_missing_only(*, repo_path: str, base_branch: str, dbl_filename: str) -> InitResult:

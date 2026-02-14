@@ -85,6 +85,9 @@ class RepoSettingsDialog(wx.Dialog):
         self.init_btn = wx.Button(self, label="Initialize database repo…")
         self.init_btn.Bind(wx.EVT_BUTTON, self._on_init_repo)
         btns.Add(self.init_btn, 0, wx.ALL, 10)
+        self.update_btn = wx.Button(self, label="Update repo tools…")
+        self.update_btn.Bind(wx.EVT_BUTTON, self._on_update_repo_tools)
+        btns.Add(self.update_btn, 0, wx.ALL, 10)
         btns.AddStretchSpacer(1)
         # NOTE: wx.ALIGN_RIGHT is invalid inside a horizontal sizer on some wx builds
         # (asserts). The stretch spacer already pushes this to the right.
@@ -337,6 +340,91 @@ class RepoSettingsDialog(wx.Dialog):
         except Exception:
             pass
 
+    def _on_update_repo_tools(self, _evt: wx.CommandEvent) -> None:
+        """
+        Update scaffold-managed workflows + tools in an existing database repo.
+        This overwrites those files when they differ from the current plugin templates.
+        """
+        from ..init_db_repo import commit_and_push_init, compute_update_actions, ensure_git_clean_and_origin, update_repo_scaffold_tools
+
+        repo_path = str(self._repo_path or self._cfg.repo_path or "").strip()
+        if not repo_path:
+            wx.MessageBox("Local database path is not set.", "Update repo tools", wx.OK | wx.ICON_WARNING, parent=self)
+            return
+
+        branch = (self.base.GetValue() or "").strip() or "main"
+
+        try:
+            ensure_git_clean_and_origin(repo_path)
+        except Exception as exc:  # noqa: BLE001
+            wx.MessageBox(str(exc), "Update repo tools", wx.OK | wx.ICON_WARNING, parent=self)
+            return
+
+        # Determine which files would be updated/created.
+        actions = []
+        try:
+            actions = compute_update_actions(repo_path=repo_path, base_branch=branch)
+        except Exception as exc:  # noqa: BLE001
+            wx.MessageBox(f"Could not compute update actions:\n\n{exc}", "Update repo tools", wx.OK | wx.ICON_ERROR, parent=self)
+            return
+
+        would_create: list[str] = []
+        would_update: list[str] = []
+        skipped_same: list[str] = []
+        for rel, txt in actions:
+            ap = os.path.join(repo_path, rel)
+            if not os.path.exists(ap):
+                would_create.append(rel)
+                continue
+            try:
+                with open(ap, "r", encoding="utf-8", errors="replace") as f:
+                    cur = f.read()
+            except Exception:
+                cur = None
+            if cur == txt:
+                skipped_same.append(rel)
+            else:
+                would_update.append(rel)
+
+        if not would_create and not would_update:
+            wx.MessageBox("Repo tools are already up to date.", "Update repo tools", wx.OK | wx.ICON_INFORMATION, parent=self)
+            return
+
+        default_msg = "chore: update database repo tools"
+        dlg = _UpdateRepoToolsConfirmDialog(self, created=would_create, updated=would_update, skipped=skipped_same, default_commit_message=default_msg)
+        try:
+            if dlg.ShowModal() != wx.ID_OK:
+                return
+            commit_msg = dlg.get_commit_message()
+        finally:
+            dlg.Destroy()
+
+        try:
+            res = update_repo_scaffold_tools(repo_path=repo_path, base_branch=branch)
+        except Exception as exc:  # noqa: BLE001
+            wx.MessageBox(f"Update failed:\n\n{exc}", "Update repo tools", wx.OK | wx.ICON_ERROR, parent=self)
+            return
+
+        # Commit and push updates (created + updated files).
+        try:
+            paths = list(res.created or []) + list(res.updated or [])
+            commit_and_push_init(
+                repo_path=repo_path,
+                commit_message=commit_msg or default_msg,
+                base_branch=branch,
+                paths=paths,
+            )
+        except Exception as exc:  # noqa: BLE001
+            wx.MessageBox(f"Updated files but could not commit/push:\n\n{exc}", "Update repo tools", wx.OK | wx.ICON_WARNING, parent=self)
+            return
+
+        wx.MessageBox(
+            f"Updated repository tooling.\n\nCreated {len(res.created)} file(s).\nUpdated {len(res.updated)} file(s).\nUnchanged {len(res.skipped_same)} file(s).",
+            "Update repo tools",
+            wx.OK | wx.ICON_INFORMATION,
+            parent=self,
+        )
+
 
 class _InitRepoConfirmDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, *, missing: list[str], skipped: list[str], default_commit_message: str) -> None:
@@ -384,6 +472,58 @@ class _InitRepoConfirmDialog(wx.Dialog):
         except Exception:
             return ""
 
+
+class _UpdateRepoToolsConfirmDialog(wx.Dialog):
+    def __init__(self, parent: wx.Window, *, created: list[str], updated: list[str], skipped: list[str], default_commit_message: str) -> None:
+        super().__init__(parent, title="Update repo tools", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self._created = list(created or [])
+        self._updated = list(updated or [])
+        self._skipped = list(skipped or [])
+
+        root = wx.BoxSizer(wx.VERTICAL)
+        root.Add(
+            wx.StaticText(
+                self,
+                label=(
+                    "This will update scaffold-managed workflows + tools in the selected database repo.\n"
+                    "Safety: it will overwrite those specific files only when they differ from the current templates.\n"
+                    "It will then commit and push the changes to origin."
+                ),
+            ),
+            0,
+            wx.ALL | wx.EXPAND,
+            10,
+        )
+
+        def _block(title: str, items: list[str]) -> None:
+            if not items:
+                return
+            root.Add(wx.StaticText(self, label=title), 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
+            box = wx.TextCtrl(self, style=wx.TE_MULTILINE | wx.TE_READONLY, size=(-1, 120))
+            box.SetValue("\n".join(items))
+            root.Add(box, 0, wx.ALL | wx.EXPAND, 10)
+
+        _block(f"Files to update (overwrite): {len(self._updated)}", self._updated)
+        _block(f"Files to create: {len(self._created)}", self._created)
+        if self._skipped:
+            root.Add(wx.StaticText(self, label=f"Unchanged files (skipped): {len(self._skipped)}"), 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        msg_row = wx.BoxSizer(wx.HORIZONTAL)
+        msg_row.Add(wx.StaticText(self, label="Commit message"), 0, wx.ALIGN_CENTER_VERTICAL)
+        msg_row.AddSpacer(10)
+        self._msg = wx.TextCtrl(self, value=str(default_commit_message or ""))
+        msg_row.Add(self._msg, 1, wx.EXPAND)
+        root.Add(msg_row, 0, wx.ALL | wx.EXPAND, 10)
+
+        root.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        self.SetSizer(root)
+        self.SetMinSize((820, 560))
+
+    def get_commit_message(self) -> str:
+        try:
+            return str(self._msg.GetValue() or "").strip()
+        except Exception:
+            return ""
 
 class ComponentDialogBase(wx.Dialog):
     def __init__(
