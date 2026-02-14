@@ -1,0 +1,25 @@
+# OS-generated / editor / Python cache files (keep repo clean)
+#
+# macOS
+.DS_Store
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux / general
+.Trash-*
+
+# Editors
+*~
+*.bak
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+

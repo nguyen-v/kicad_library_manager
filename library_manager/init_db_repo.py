@@ -91,6 +91,7 @@ def compute_init_actions(*, repo_path: str, base_branch: str, dbl_filename: str)
     add_from_template("tools/assign_ipn.py", replace_branch=False)
     add_from_template("tools/update_dbl.py", replace_branch=False)
     add_from_template("tools/build_sqlite.py", replace_branch=False)
+    add_from_template(".gitignore", replace_branch=False)
 
     # Database seed
     out.append((os.path.join("Database", dbl).replace("\\", "/"), _read_text(os.path.join(root, "Database", "template.kicad_dbl"))))
