@@ -6,6 +6,7 @@ import time
 
 from .libcache import FP_LIBCACHE, resolve_footprint_pretty_dir as _resolve_footprint_pretty_dir_cached
 from ..._subprocess import SUBPROCESS_NO_WINDOW
+from ..kicad_env import resolve_kicad_cli
 
 
 def find_pretty_dir_repo_local(repo_path: str, lib: str) -> str | None:
@@ -105,9 +106,10 @@ def render_footprint_svg(repo_path: str, fp_ref: str, out_svg_path: str) -> None
     os.makedirs(out_dir, exist_ok=True)
     tmp_dir = tempfile.mkdtemp(prefix="fp_", dir=tempfile.gettempdir())
     try:
+        exe = resolve_kicad_cli()
         layers = "F.Cu,F.Mask,F.SilkS,F.Fab,F.CrtYd"
         cp = subprocess.run(
-            ["kicad-cli", "fp", "export", "svg", "-o", tmp_dir, "--fp", fp, "--layers", layers, pretty],
+            [exe, "fp", "export", "svg", "-o", tmp_dir, "--fp", fp, "--layers", layers, pretty],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -117,7 +119,7 @@ def render_footprint_svg(repo_path: str, fp_ref: str, out_svg_path: str) -> None
         )
         if cp.returncode != 0:
             cp2 = subprocess.run(
-                ["kicad-cli", "fp", "export", "svg", "-o", tmp_dir, "--fp", fp, "--layers", "F.Fab", pretty],
+                [exe, "fp", "export", "svg", "-o", tmp_dir, "--fp", fp, "--layers", "F.Fab", pretty],
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -127,7 +129,7 @@ def render_footprint_svg(repo_path: str, fp_ref: str, out_svg_path: str) -> None
             )
             if cp2.returncode != 0:
                 cp3 = subprocess.run(
-                    ["kicad-cli", "fp", "export", "svg", "-o", tmp_dir, "--fp", fp, "--layers", "F.Cu", pretty],
+                    [exe, "fp", "export", "svg", "-o", tmp_dir, "--fp", fp, "--layers", "F.Cu", pretty],
                     check=False,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,

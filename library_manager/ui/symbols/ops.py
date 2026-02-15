@@ -8,6 +8,7 @@ import time
 
 from .libcache import SYMBOL_LIBCACHE, resolve_symbol_lib_path
 from ..._subprocess import SUBPROCESS_NO_WINDOW
+from ..kicad_env import resolve_kicad_cli
 
 
 def extract_kicad_symbol_meta(sym_lib_path: str, symbol_name: str) -> tuple[str, str]:
@@ -138,8 +139,9 @@ def render_symbol_svg(repo_path: str, sym_ref: str, out_svg_path: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     tmp_dir = tempfile.mkdtemp(prefix="sym_", dir=tempfile.gettempdir())
     try:
+        exe = resolve_kicad_cli()
         cp = subprocess.run(
-            ["kicad-cli", "sym", "export", "svg", "-o", tmp_dir, "-s", sym, lib_path],
+            [exe, "sym", "export", "svg", "-o", tmp_dir, "-s", sym, lib_path],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,

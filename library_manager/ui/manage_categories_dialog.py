@@ -15,6 +15,7 @@ from ..config import Config
 from ..repo import Category, list_categories
 from .async_ui import UiRepeater, is_window_alive
 from .git_ops import (
+    format_age_minutes,
     git_fetch_head_mtime,
     git_object_exists,
     git_sync_ff_only,
@@ -24,6 +25,7 @@ from .git_ops import (
 from .icons import make_status_bitmap
 from .pending import PENDING, reconcile_pending_against_local_csv, update_pending_states_after_fetch
 from .requests import prompt_commit_message, submit_request
+from .window_title import with_library_suffix
 
 
 def _repo_categories_yml_path(repo_path: str) -> str:
@@ -167,7 +169,7 @@ class _CategoryWizardDialog(wx.Dialog):
         vbox.Add(self._fields, 1, wx.ALL | wx.EXPAND, 10)
 
         btn_row = wx.BoxSizer(wx.HORIZONTAL)
-        add_f = wx.Button(self, label="Add custom field…")
+        add_f = wx.Button(self, label="Add custom field")
         rm_f = wx.Button(self, label="Remove selected field")
         up_f = wx.Button(self, label="Move up")
         dn_f = wx.Button(self, label="Move down")
@@ -420,7 +422,7 @@ class _CategoryWizardDialog(wx.Dialog):
 
 class ManageCategoriesDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, repo_path: str):
-        super().__init__(parent, title="Manage categories", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX)
+        super().__init__(parent, title=with_library_suffix("Manage categories", repo_path), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX)
         self._repo_path = repo_path
         self._cfg = Config.load_effective(self._repo_path)
         self._categories: list[Category] = []
@@ -458,9 +460,9 @@ class ManageCategoriesDialog(wx.Dialog):
         vbox.Add(self._table, 1, wx.ALL | wx.EXPAND, 8)
 
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        add_btn = wx.Button(self, label="Add category…")
-        edit_btn = wx.Button(self, label="Edit category…")
-        del_btn = wx.Button(self, label="Delete category…")
+        add_btn = wx.Button(self, label="Add category")
+        edit_btn = wx.Button(self, label="Edit category")
+        del_btn = wx.Button(self, label="Delete category")
         close_btn = wx.Button(self, id=wx.ID_CANCEL, label="Close")
         add_btn.Bind(wx.EVT_BUTTON, self._on_add)
         edit_btn.Bind(wx.EVT_BUTTON, self._on_edit)
@@ -584,7 +586,7 @@ class ManageCategoriesDialog(wx.Dialog):
         stale = bool(st.get("stale"))
         if stale:
             age = st.get("age")
-            suffix = f" (last fetch {age}s ago)" if age is not None else ""
+            suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
             self._status_icon.SetBitmap(self._bmp_gray)
             self._status_lbl.SetLabel("Library status: unknown / stale — click Fetch remote" + suffix)
             return

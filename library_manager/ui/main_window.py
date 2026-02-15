@@ -25,6 +25,8 @@ from .git_ops import (
     git_diff_name_status,
     git_fetch_head_age_seconds,
     git_fetch_head_mtime,
+    format_age_minutes,
+    fetch_stale_threshold_seconds,
     git_last_updated_epoch_by_path,
     git_log_last_commits_for_path,
     git_show_commit_for_path,
@@ -47,13 +49,14 @@ from .pending import (
 from .services import category_title
 from .widgets import SearchPickerDialog
 from .assets.status import local_asset_paths
+from .window_title import with_library_suffix
 
 
 class MainDialog(wx.Frame):
     def __init__(self, parent: wx.Window | None, repo_path: str, project_path: str = ""):
         super().__init__(
             parent,
-            title="KiCad Library Manager",
+            title=with_library_suffix("KiCad Library Manager", repo_path),
             style=wx.DEFAULT_FRAME_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
         )
         self._repo_path = repo_path
@@ -150,7 +153,7 @@ class MainDialog(wx.Frame):
         self._hist_list.AppendTextColumn("Date", width=160, mode=dv.DATAVIEW_CELL_INERT)
         self._hist_list.AppendTextColumn("Author", width=140, mode=dv.DATAVIEW_CELL_INERT)
         self._hist_list.AppendTextColumn("Subject", width=360, mode=dv.DATAVIEW_CELL_INERT)
-        self._hist_show_btn = wx.Button(hist_panel, label="Show diff…")
+        self._hist_show_btn = wx.Button(hist_panel, label="Show diff")
         self._hist_show_btn.Bind(wx.EVT_BUTTON, self._on_hist_show_diff)
         self._hist_show_btn.Enable(False)
         self._hist_list.Bind(dv.EVT_DATAVIEW_SELECTION_CHANGED, self._on_hist_selection_changed)
@@ -171,39 +174,43 @@ class MainDialog(wx.Frame):
         vbox.Add(self.log, 0, wx.ALL | wx.EXPAND, 8)
 
         bottom = wx.BoxSizer(wx.HORIZONTAL)
-        self.settings_btn = wx.Button(self, label="Settings…")
+        self.settings_btn = wx.Button(self, label="Settings")
         self.settings_btn.Bind(wx.EVT_BUTTON, self._on_settings)
         bottom.Add(self.settings_btn, 0, wx.ALL, 8)
 
-        self.categories_btn = wx.Button(self, label="Manage categories…")
+        self.categories_btn = wx.Button(self, label="Manage categories")
         self.categories_btn.Bind(wx.EVT_BUTTON, self._on_manage_categories)
         self._set_button_bitmap(self.categories_btn, self._bmp_gray)
         bottom.Add(self.categories_btn, 0, wx.ALL, 8)
 
-        self.create_fp_btn = wx.Button(self, label="Create footprint…")
+        self.create_fp_btn = wx.Button(self, label="Create footprint")
         self.create_fp_btn.Bind(wx.EVT_BUTTON, self._on_create_footprint)
         bottom.Add(self.create_fp_btn, 0, wx.ALL, 8)
 
-        self.browse_fp_btn = wx.Button(self, label="Browse footprints…")
+        self.browse_fp_btn = wx.Button(self, label="Browse footprints")
         self.browse_fp_btn.Bind(wx.EVT_BUTTON, self._on_browse_footprints)
         self._set_button_bitmap(self.browse_fp_btn, self._bmp_gray)
         bottom.Add(self.browse_fp_btn, 0, wx.ALL, 8)
 
-        self.browse_sym_btn = wx.Button(self, label="Browse symbols…")
+        self.browse_sym_btn = wx.Button(self, label="Browse symbols")
         self.browse_sym_btn.Bind(wx.EVT_BUTTON, self._on_browse_symbols)
         self._set_button_bitmap(self.browse_sym_btn, self._bmp_gray)
         bottom.Add(self.browse_sym_btn, 0, wx.ALL, 8)
 
         bottom.AddStretchSpacer(1)
         close_btn = wx.Button(self, label="Close")
-        close_btn.Bind(wx.EVT_BUTTON, lambda _e: self.Hide())
+        # IMPORTANT: do not just Hide() the main window.
+        # This plugin runs as an external process; hiding would keep it alive in the background,
+        # preventing re-launch when single-instance locking is enabled.
+        close_btn.Bind(wx.EVT_BUTTON, lambda _e: self.Close())
         bottom.Add(close_btn, 0, wx.ALL, 8)
         vbox.Add(bottom, 0, wx.EXPAND)
 
         self.SetSizer(vbox)
         self.Layout()
-        self.SetMinSize((900, 650))
-        self.SetSize((1200, 800))
+        # Make the main window comfortably large by default (most workflows use it all day).
+        self.SetMinSize((1300, 850))
+        self.SetSize((1750, 1050))
 
         # Initialize UI based on whether this repo looks initialized.
         self._apply_repo_state()
@@ -367,6 +374,10 @@ class MainDialog(wx.Frame):
         """
         Refresh UI + background loops depending on whether repo is initialized.
         """
+        try:
+            self.SetTitle(with_library_suffix("KiCad Library Manager", self._repo_path, cfg=getattr(self, "_cfg", None)))
+        except Exception:
+            pass
         ready, reason = self._repo_ready()
         if not ready:
             self._enter_setup_mode(reason)
@@ -654,7 +665,7 @@ class MainDialog(wx.Frame):
             dirty = bool(st.get("dirty"))
             if stale:
                 age = st.get("age")
-                suffix = f" (last fetch {age}s ago)" if age is not None else ""
+                suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
                 self.sync_icon.SetBitmap(self._bmp_gray)
                 self.sync_label.SetLabel("Library status: unknown / stale — click Fetch remote" + suffix)
             else:
@@ -778,9 +789,9 @@ class MainDialog(wx.Frame):
         local_sym = sorted(local_asset_paths(self._repo_path, ["Symbols"]))
 
         age = git_fetch_head_age_seconds(self._repo_path)
-        stale = (age is None) or (age > 300)
+        stale = (age is None) or (age > fetch_stale_threshold_seconds(self._repo_path))
         if stale:
-            suffix = f" (last fetch {age}s ago)" if age is not None else ""
+            suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
             self.assets_icon.SetBitmap(self._bmp_yellow if local_all else self._bmp_red)
             self.assets_label.SetLabel(
                 f"Local assets (uncommitted): {len(local_all)} changed — "
@@ -1415,99 +1426,114 @@ class MainDialog(wx.Frame):
                 )
                 return
 
-            existing = getattr(self, "_fpgen_win", None)
-            if existing:
-                try:
-                    existing.Raise()
-                    existing.SetFocus()
-                    return
-                except Exception:
-                    pass
+            # Open as a modal child dialog (like Settings / Manage categories).
+            try:
+                self._modal_settings_open = True
+            except Exception:
+                pass
+            try:
+                self._stop_remote_polling()
+            except Exception:
+                pass
             win = FootprintGeneratorDialog(self, self._repo_path)
             self._fpgen_win = win
-
-            def on_close(evt: wx.CloseEvent) -> None:
+            try:
+                win.ShowModal()
+            finally:
                 try:
                     if getattr(self, "_fpgen_win", None) is win:
                         self._fpgen_win = None
                 except Exception:
                     pass
-                evt.Skip()
-
-            win.Bind(wx.EVT_CLOSE, on_close)
-            win.Show(True)
-            win.Raise()
+                try:
+                    win.Destroy()
+                except Exception:
+                    pass
+                try:
+                    self._modal_settings_open = False
+                except Exception:
+                    pass
+                try:
+                    if self.IsShown() and not bool(getattr(self, "_setup_mode", False)):
+                        self._start_remote_polling()
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             wx.MessageBox(f"Create footprint crashed:\n\n{exc}", "KiCad Library Manager", wx.OK | wx.ICON_ERROR)
 
     def _on_browse_footprints(self, _evt: wx.CommandEvent) -> None:
         try:
-            existing = getattr(self, "_browse_fp_win", None)
-            if existing:
-                try:
-                    existing.Raise()
-                    existing.SetFocus()
-                except Exception:
-                    pass
-                return
             from .footprints.browser_dialog import FootprintBrowserDialog
 
             dlg = FootprintBrowserDialog(self, self._repo_path)
             self._browse_fp_win = dlg
-
-            def _on_close(evt):
+            try:
+                self._modal_settings_open = True
+            except Exception:
+                pass
+            try:
+                self._stop_remote_polling()
+            except Exception:
+                pass
+            try:
+                dlg.ShowModal()
+            finally:
                 try:
                     if getattr(self, "_browse_fp_win", None) is dlg:
                         self._browse_fp_win = None
                 except Exception:
                     pass
                 try:
-                    evt.Skip()
+                    dlg.Destroy()
                 except Exception:
                     pass
-
-            dlg.Bind(wx.EVT_CLOSE, _on_close)
-            dlg.Show(True)
-            try:
-                dlg.Raise()
-            except Exception:
-                pass
+                try:
+                    self._modal_settings_open = False
+                except Exception:
+                    pass
+                try:
+                    if self.IsShown() and not bool(getattr(self, "_setup_mode", False)):
+                        self._start_remote_polling()
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             wx.MessageBox(f"Browse footprints crashed:\n\n{exc}", "KiCad Library Manager", wx.OK | wx.ICON_ERROR)
 
     def _on_browse_symbols(self, _evt: wx.CommandEvent) -> None:
         try:
-            existing = getattr(self, "_browse_sym_win", None)
-            if existing:
-                try:
-                    existing.Raise()
-                    existing.SetFocus()
-                except Exception:
-                    pass
-                return
-
             from .symbols.browser_dialog import SymbolBrowserDialog
 
             dlg = SymbolBrowserDialog(self, self._repo_path)
             self._browse_sym_win = dlg
-
-            def _on_close(evt):
+            try:
+                self._modal_settings_open = True
+            except Exception:
+                pass
+            try:
+                self._stop_remote_polling()
+            except Exception:
+                pass
+            try:
+                dlg.ShowModal()
+            finally:
                 try:
                     if getattr(self, "_browse_sym_win", None) is dlg:
                         self._browse_sym_win = None
                 except Exception:
                     pass
                 try:
-                    evt.Skip()
+                    dlg.Destroy()
                 except Exception:
                     pass
-
-            dlg.Bind(wx.EVT_CLOSE, _on_close)
-            dlg.Show(True)
-            try:
-                dlg.Raise()
-            except Exception:
-                pass
+                try:
+                    self._modal_settings_open = False
+                except Exception:
+                    pass
+                try:
+                    if self.IsShown() and not bool(getattr(self, "_setup_mode", False)):
+                        self._start_remote_polling()
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             wx.MessageBox(f"Browse symbols crashed:\n\n{exc}", "KiCad Library Manager", wx.OK | wx.ICON_ERROR)
 
@@ -1531,27 +1557,38 @@ class MainDialog(wx.Frame):
             )
             return
         try:
-            # Keep a reference to the window to avoid GC edge cases and to allow cleanup on shutdown.
+            # Open as a modal child dialog (subwindow) like Settings / Manage categories.
+            try:
+                self._modal_settings_open = True
+            except Exception:
+                pass
+            try:
+                self._stop_remote_polling()
+            except Exception:
+                pass
             frm = BrowseDialog(self, self._repo_path, cat)
             self._browse_cat_win = frm
-
-            def _on_close(evt):
+            try:
+                frm.ShowModal()
+            finally:
                 try:
                     if getattr(self, "_browse_cat_win", None) is frm:
                         self._browse_cat_win = None
                 except Exception:
                     pass
                 try:
-                    evt.Skip()
+                    frm.Destroy()
                 except Exception:
                     pass
-
-            frm.Bind(wx.EVT_CLOSE, _on_close)
-            frm.Show(True)
-            try:
-                frm.Raise()
-            except Exception:
-                pass
+                try:
+                    self._modal_settings_open = False
+                except Exception:
+                    pass
+                try:
+                    if self.IsShown() and not bool(getattr(self, "_setup_mode", False)):
+                        self._start_remote_polling()
+                except Exception:
+                    pass
         except Exception as exc:  # noqa: BLE001
             wx.MessageBox(
                 "Browse category crashed:\n\n" + str(exc) + "\n\n" + traceback.format_exc(),
@@ -1581,7 +1618,7 @@ class MainDialog(wx.Frame):
         if bool(getattr(self, "_remote_cat_updated_loading", False)):
             return
         age = git_fetch_head_age_seconds(self._repo_path)
-        stale = (age is None) or (age > 300)
+        stale = (age is None) or (age > fetch_stale_threshold_seconds(self._repo_path))
         if stale:
             self._remote_cat_updated_ts_by_path = {}
             return
@@ -2256,7 +2293,7 @@ class _CsvDiffDialog(wx.Dialog):
         root.Add(self._grid, 1, wx.ALL | wx.EXPAND, 8)
 
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        raw_btn = wx.Button(self, label="View raw diff…")
+        raw_btn = wx.Button(self, label="View raw diff")
         close_btn = wx.Button(self, id=wx.ID_OK, label="Close")
         btns.AddStretchSpacer(1)
         btns.Add(raw_btn, 0, wx.ALL, 6)

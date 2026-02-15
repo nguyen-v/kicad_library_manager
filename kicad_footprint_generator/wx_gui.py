@@ -13,6 +13,17 @@ from typing import Any, Dict, Tuple
 import wx
 
 try:
+    # Used for preview rendering (kicad-cli lookup is tricky on macOS when PATH is limited).
+    from library_manager.ui.kicad_env import resolve_kicad_cli  # type: ignore
+except Exception:
+    resolve_kicad_cli = None  # type: ignore
+
+try:
+    from library_manager.ui.window_title import with_library_suffix  # type: ignore
+except Exception:
+    with_library_suffix = None  # type: ignore
+
+try:
     from library_manager.ui.async_ui import UiDebouncer  # type: ignore
 except Exception:
     UiDebouncer = None  # type: ignore
@@ -191,22 +202,20 @@ def _list_pretty_dirs(repo_path: str) -> Tuple[str, list[str]]:
     return root, pretty
 
 
-class FootprintGeneratorDialog(wx.Frame):
+class FootprintGeneratorDialog(wx.Dialog):
     """
     wxPython-integrated footprint generator dialog for KiCad.
     Writes generated `.kicad_mod` files into a chosen `.pretty` directory.
     """
 
     def __init__(self, parent: wx.Window, repo_path: str):
-        # IMPORTANT: create as a true top-level window (no wx parent). If the generator is
-        # opened from a modal dialog (e.g. footprint browser), that modal dialog disables its
-        # parent window; a parented frame can inherit "disabled" state and become uncloseable.
-        # We still keep a reference to the logical owner for callbacks.
+        # We create this as a dialog parented to the main plugin window so it behaves like
+        # other "subwindows" (Settings / Manage categories) and stays tied to the KiCad window.
         self._owner = parent
         super().__init__(
-            None,
-            title="Create footprint",
-            style=wx.DEFAULT_FRAME_STYLE | wx.CLIP_CHILDREN,
+            parent,
+            title=(with_library_suffix("Create footprint", repo_path) if with_library_suffix else "Create footprint"),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX | wx.CLIP_CHILDREN,
         )
         self._repo_path = repo_path
 
@@ -284,7 +293,7 @@ class FootprintGeneratorDialog(wx.Frame):
             self.out_choice.SetSelection(0)
         self.out_choice.Bind(wx.EVT_CHOICE, lambda _e: self._schedule_preview_update())
         out_row.Add(self.out_choice, 1, wx.EXPAND)
-        browse = wx.Button(left, label="Browse…")
+        browse = wx.Button(left, label="Browse")
         browse.Bind(wx.EVT_BUTTON, self._on_browse_out)
         out_row.Add(browse, 0, wx.LEFT, 8)
         top.Add(out_row, 1, wx.EXPAND)
@@ -388,6 +397,11 @@ class FootprintGeneratorDialog(wx.Frame):
             self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
         except Exception:
             pass
+        # ESC should close this dialog (common expectation, especially on macOS).
+        try:
+            self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        except Exception:
+            pass
 
         # After initial layout, set splitter to 2/3 (left) vs 1/3 (right).
         try:
@@ -407,6 +421,25 @@ class FootprintGeneratorDialog(wx.Frame):
         self._active_kind = self.kind.GetStringSelection() or "soic"
         self._schedule_hints_update()
         self._schedule_preview_update()
+
+    def _on_char_hook(self, evt: wx.KeyEvent) -> None:
+        try:
+            code = int(evt.GetKeyCode())
+        except Exception:
+            code = -1
+        if code == wx.WXK_ESCAPE:
+            try:
+                if self.IsModal():
+                    self.EndModal(wx.ID_CANCEL)
+                else:
+                    self.Close()
+                return
+            except Exception:
+                pass
+        try:
+            evt.Skip()
+        except Exception:
+            pass
 
     def _stop_timers_best_effort(self) -> None:
         try:
@@ -556,8 +589,16 @@ class FootprintGeneratorDialog(wx.Frame):
             self._persist_kind_state_best_effort(k, update_global=True)
         except Exception:
             pass
+        # If shown modally, end the modal loop so the caller can Destroy() us.
         try:
-            # For a frame, we explicitly destroy after handling.
+            if self.IsModal():
+                try:
+                    self.EndModal(wx.ID_CANCEL)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
             self.Destroy()
         except Exception:
             try:
@@ -940,7 +981,10 @@ class FootprintGeneratorDialog(wx.Frame):
         except Exception:
             pass
         try:
-            self.Close()
+            if self.IsModal():
+                self.EndModal(wx.ID_CANCEL)
+            else:
+                self.Close()
         except Exception:
             try:
                 self.Destroy()
@@ -1535,8 +1579,14 @@ class FootprintGeneratorDialog(wx.Frame):
             fp_name = os.path.splitext(os.path.basename(mod_path))[0]
 
             layers = "F.Cu,F.Mask,F.SilkS,F.Fab,F.CrtYd"
+            exe = "kicad-cli"
+            try:
+                if resolve_kicad_cli:
+                    exe = resolve_kicad_cli()
+            except Exception:
+                exe = "kicad-cli"
             cp = subprocess.run(
-                ["kicad-cli", "fp", "export", "svg", "-o", tmp_dir, "--fp", fp_name, "--layers", layers, pretty_dir],
+                [exe, "fp", "export", "svg", "-o", tmp_dir, "--fp", fp_name, "--layers", layers, pretty_dir],
                 check=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,

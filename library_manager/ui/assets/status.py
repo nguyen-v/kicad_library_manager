@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import os
 
-from ..git_ops import git_diff_name_status, git_fetch_head_age_seconds, git_ls_tree_paths, git_status_entries, paths_changed_under
+from ..git_ops import fetch_stale_threshold_seconds, git_diff_name_status, git_fetch_head_age_seconds, git_ls_tree_paths, git_status_entries, paths_changed_under
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,7 @@ def asset_change_sets(repo_path: str) -> tuple[set[str], set[str], bool]:
     local_paths = local_asset_paths(repo_path, ["Symbols", "Footprints"])
 
     age = git_fetch_head_age_seconds(repo_path)
-    stale = (age is None) or (age > 300)
+    stale = (age is None) or (age > fetch_stale_threshold_seconds(repo_path))
     if stale:
         return (local_paths, set(), False)
 

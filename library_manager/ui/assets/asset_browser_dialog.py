@@ -24,12 +24,13 @@ except Exception:
     _wxdv = None
 
 from ..async_ui import UiDebouncer, UiRepeater, WindowTaskRunner
-from ..git_ops import git_fetch_head_age_seconds, git_last_updated_epoch
+from ..git_ops import fetch_stale_threshold_seconds, format_age_minutes, git_fetch_head_age_seconds, git_last_updated_epoch
 from ..icons import make_status_bitmap
 from .debuglog import log_line as _dbg
 from ..preview_panel import PreviewPanel
 from .search import norm, search_backend_info, search_hits_by_lib
 from .status import asset_change_sets, local_summary_scoped, remote_summary_scoped
+from ..window_title import with_library_suffix
 
 
 class AssetIndexProvider(Protocol):
@@ -119,7 +120,7 @@ class AssetBrowserDialogBase(wx.Dialog):
     def __init__(self, parent: wx.Window, repo_path: str, provider: AssetBrowserProvider, *, picker_mode: bool = False):
         super().__init__(
             parent,
-            title=provider.kind_title,
+            title=with_library_suffix(provider.kind_title, repo_path),
             style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
         )
         self._repo_path = repo_path
@@ -191,6 +192,11 @@ class AssetBrowserDialogBase(wx.Dialog):
             self.Bind(wx.EVT_ACTIVATE, self._on_activate)
         except Exception:
             pass
+        # ESC should close these modal "subwindows" (macOS especially expects this).
+        try:
+            self.Bind(wx.EVT_CHAR_HOOK, self._on_char_hook)
+        except Exception:
+            pass
 
         # Build UI
         v = wx.BoxSizer(wx.VERTICAL)
@@ -253,12 +259,16 @@ class AssetBrowserDialogBase(wx.Dialog):
             row.AddStretchSpacer(1)
             v.Add(row, 0, wx.EXPAND)
 
-        body = wx.BoxSizer(wx.HORIZONTAL)
+        # Splitter: make preview pane user-resizable (drag sash).
+        splitter = wx.SplitterWindow(self, style=wx.SP_LIVE_UPDATE)
+        self._splitter = splitter
+        left = wx.Panel(splitter)
+        right = wx.Panel(splitter)
 
         # Tree
         if _wxadv and hasattr(_wxadv, "TreeListCtrl"):
             self.tree = _wxadv.TreeListCtrl(
-                self,
+                left,
                 style=wx.TR_DEFAULT_STYLE | wx.TR_HAS_BUTTONS | wx.TR_LINES_AT_ROOT | wx.TR_FULL_ROW_HIGHLIGHT | wx.TR_HIDE_ROOT,
             )
             self.tree.AppendColumn(self._p.tree_col1, width=520)
@@ -278,7 +288,7 @@ class AssetBrowserDialogBase(wx.Dialog):
             # IMPORTANT: Avoid wxPython's pure-Python TreeListCtrl wrappers (wx.lib.gizmos/AGW),
             # which create internal wx.Timer instances (see gdb: wx/lib/agw/hypertreelist.py).
             # Those timers are a known crash source in our workflow (use-after-free in wx timer dispatch).
-            self.tree = _wxdv.TreeListCtrl(self, style=_wxdv.TL_DEFAULT_STYLE)
+            self.tree = _wxdv.TreeListCtrl(left, style=_wxdv.TL_DEFAULT_STYLE)
             self.tree.AppendColumn(self._p.tree_col1, width=520)
             self.tree.AppendColumn(self._p.tree_col2, width=820)
             self.tree.Bind(_wxdv.EVT_TREELIST_SELECTION_CHANGED, self._on_select_tree)
@@ -289,7 +299,7 @@ class AssetBrowserDialogBase(wx.Dialog):
                 pass
         else:
             self.tree = wx.TreeCtrl(
-                self,
+                left,
                 style=wx.TR_HAS_BUTTONS | wx.TR_LINES_AT_ROOT | wx.TR_HIDE_ROOT | wx.TR_FULL_ROW_HIGHLIGHT,
             )
             self.tree.Bind(wx.EVT_TREE_SEL_CHANGED, self._on_select_tree)
@@ -310,12 +320,14 @@ class AssetBrowserDialogBase(wx.Dialog):
         except Exception:
             pass
 
-        body.Add(self.tree, 1, wx.ALL | wx.EXPAND, 8)
+        left_s = wx.BoxSizer(wx.VERTICAL)
+        left_s.Add(self.tree, 1, wx.ALL | wx.EXPAND, 8)
+        left.SetSizer(left_s)
 
         # Preview pane (reusable widget)
-        prev_box = wx.StaticBoxSizer(wx.VERTICAL, self, self._p.preview_box_title)
+        prev_box = wx.StaticBoxSizer(wx.VERTICAL, right, self._p.preview_box_title)
         self._preview = PreviewPanel(
-            self,
+            right,
             empty_label=self._p.empty_preview_label,
             show_choice=True,
             # Allow the right pane to shrink horizontally; keep a sane minimum height.
@@ -330,9 +342,32 @@ class AssetBrowserDialogBase(wx.Dialog):
         self.prev_bmp = self._preview.bmp
         self.prev_choice.Bind(wx.EVT_CHOICE, lambda _e: (self._update_last_updated_label(), self._render_selected()))
         prev_box.Add(self._preview, 1, wx.EXPAND)
-        body.Add(prev_box, 0, wx.ALL | wx.EXPAND, 8)
+        right_s = wx.BoxSizer(wx.VERTICAL)
+        right_s.Add(prev_box, 1, wx.ALL | wx.EXPAND, 8)
+        right.SetSizer(right_s)
 
-        v.Add(body, 1, wx.EXPAND)
+        splitter.SplitVertically(left, right, sashPosition=1080)
+        splitter.SetMinimumPaneSize(320)
+        try:
+            splitter.SetSashGravity(0.75)
+        except Exception:
+            pass
+        # Prefer keeping a generous preview width by default.
+        # Avoid negative sash positions (can assert on some wx ports, notably macOS).
+        def _set_default_sash() -> None:
+            try:
+                w = int(splitter.GetClientSize().GetWidth() or 0)
+            except Exception:
+                w = 0
+            right_w = 520
+            try:
+                pos = max(320, w - right_w) if w else 1080
+                splitter.SetSashPosition(pos)
+            except Exception:
+                pass
+
+        wx.CallAfter(_set_default_sash)
+        v.Add(splitter, 1, wx.EXPAND)
 
         # Bottom buttons
         btns = wx.BoxSizer(wx.HORIZONTAL)
@@ -341,7 +376,7 @@ class AssetBrowserDialogBase(wx.Dialog):
             self.create_btn.Bind(wx.EVT_BUTTON, self._p.on_create)
             btns.Add(self.create_btn, 0, wx.ALL, 6)
 
-        self.delete_btn = wx.Button(self, label="Delete…")
+        self.delete_btn = wx.Button(self, label="Delete")
         self.delete_btn.Bind(wx.EVT_BUTTON, self._on_delete_selected)
         btns.Add(self.delete_btn, 0, wx.ALL, 6)
 
@@ -364,7 +399,12 @@ class AssetBrowserDialogBase(wx.Dialog):
 
         btns.AddStretchSpacer(1)
         close = wx.Button(self, label="Cancel" if self._picker_mode else "Close")
-        close.Bind(wx.EVT_BUTTON, lambda _e: (self.EndModal(wx.ID_CANCEL) if self._picker_mode and self.IsModal() else self.Close()))
+        # If we are shown modally (as a child window of the main plugin), always end the modal
+        # loop so callers can safely Destroy() us in a finally block.
+        close.Bind(
+            wx.EVT_BUTTON,
+            lambda _e: (self.EndModal(wx.ID_CANCEL) if self.IsModal() else self.Close()),
+        )
         btns.Add(close, 0, wx.ALL, 6)
         v.Add(btns, 0, wx.ALL | wx.EXPAND, 8)
 
@@ -388,6 +428,25 @@ class AssetBrowserDialogBase(wx.Dialog):
         # If provider wants it, show symbol index/meta progress here (not in the preview).
         try:
             self._start_index_line_updater_if_needed()
+        except Exception:
+            pass
+
+    def _on_char_hook(self, evt: wx.KeyEvent) -> None:
+        try:
+            code = int(evt.GetKeyCode())
+        except Exception:
+            code = -1
+        if code == wx.WXK_ESCAPE:
+            try:
+                if self.IsModal():
+                    self.EndModal(wx.ID_CANCEL)
+                else:
+                    self.Close()
+                return
+            except Exception:
+                pass
+        try:
+            evt.Skip()
         except Exception:
             pass
 
@@ -910,9 +969,9 @@ class AssetBrowserDialogBase(wx.Dialog):
         except Exception:
             local = None
         age = git_fetch_head_age_seconds(self._repo_path)
-        stale = (age is None) or (age > 300)
+        stale = (age is None) or (age > fetch_stale_threshold_seconds(self._repo_path))
         if stale:
-            suffix = f" (last fetch {age}s ago)" if age is not None else ""
+            suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
             msg = f"{(local.msg if local else f'Local {self._p.scope_key}: unavailable')} — Remote {self._p.scope_key}: unknown / stale{suffix}"
             bmp = make_status_bitmap(wx.Colour(255, 193, 7) if (local.count if local else 0) else wx.Colour(160, 160, 160))
             # Keep icon sets consistent with what we can actually know.
@@ -1626,9 +1685,9 @@ class AssetBrowserDialogBase(wx.Dialog):
             return
 
         age = git_fetch_head_age_seconds(self._repo_path)
-        stale = (age is None) or (age > 300)
+        stale = (age is None) or (age > fetch_stale_threshold_seconds(self._repo_path))
         if stale:
-            suffix = f" (last fetch {age}s ago)" if age is not None else ""
+            suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
             self.prev_updated.SetLabel("Last updated (remote): unknown / stale — fetch remote" + suffix)
             return
 

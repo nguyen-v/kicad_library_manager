@@ -206,6 +206,58 @@ def git_fetch_head_age_seconds(repo_path: str) -> int | None:
         return None
 
 
+def fetch_stale_threshold_seconds(repo_path: str | None = None) -> int:
+    """
+    Return how old FETCH_HEAD can be before we consider remote status "stale".
+    Configured in minutes (default 5).
+    """
+    mins = 5
+    try:
+        rp = str(repo_path or "").strip()
+        cfg = Config.load_effective(rp) if rp else Config.load()
+        mins = int(getattr(cfg, "fetch_stale_minutes", 5) or 5)
+    except Exception:
+        mins = 5
+    if mins < 1:
+        mins = 1
+    if mins > 60 * 24:
+        mins = 60 * 24
+    return int(mins) * 60
+
+
+def is_fetch_head_stale(repo_path: str, age_s: int | None) -> bool:
+    """
+    True if FETCH_HEAD is missing/unknown or older than configured threshold.
+    """
+    if age_s is None:
+        return True
+    try:
+        return int(age_s) > int(fetch_stale_threshold_seconds(repo_path))
+    except Exception:
+        return True
+
+
+def format_age_minutes(age_s: int | None) -> str:
+    """
+    Human-friendly age string in minutes (never seconds).
+
+    Examples:
+      - 0..59s   -> "<1 min ago"
+      - 60..119s -> "1 min ago"
+      - 120s     -> "2 min ago"
+    """
+    if age_s is None:
+        return ""
+    try:
+        s = int(age_s)
+    except Exception:
+        return ""
+    if s < 60:
+        return "<1 min ago"
+    m = max(1, s // 60)
+    return "1 min ago" if m == 1 else f"{m} min ago"
+
+
 def git_fetch_head_mtime(repo_path: str) -> float | None:
     """
     Legacy-compatible: return FETCH_HEAD mtime (epoch seconds).
@@ -513,7 +565,7 @@ def git_diff_name_status(repo_path: str, a: str, b: str, paths: list[str]) -> li
 
 def git_sync_status(repo_path: str) -> dict[str, object]:
     age = git_fetch_head_age_seconds(repo_path)
-    stale = (age is None) or (age > 300)
+    stale = is_fetch_head_stale(repo_path, age)
     dirty = bool(git_status_entries(repo_path))
     out: dict[str, object] = {"dirty": dirty, "age": age, "stale": stale}
     if stale:

@@ -10,6 +10,7 @@ from ..repo import is_repo_root
 from .async_ui import is_window_alive
 from .services import validate_row
 from .widgets import ComponentFormPanel
+from .window_title import with_library_suffix
 
 
 class RepoSettingsDialog(wx.Dialog):
@@ -18,7 +19,7 @@ class RepoSettingsDialog(wx.Dialog):
     """
 
     def __init__(self, parent: wx.Window, cfg: Config, repo_path: str = "", project_path: str = ""):
-        super().__init__(parent, title="Repository settings", style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        super().__init__(parent, title=with_library_suffix("Repository settings", str(repo_path or cfg.repo_path or ""), cfg=cfg), style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
         self._cfg = cfg
         self._repo_path = repo_path
         self._project_path = project_path
@@ -33,7 +34,7 @@ class RepoSettingsDialog(wx.Dialog):
         self.repo = wx.TextCtrl(self, value=repo_path or cfg.repo_path)
         repo_row.Add(self.repo, 1, wx.EXPAND)
         repo_row.AddSpacer(8)
-        browse_btn = wx.Button(self, label="Browse…")
+        browse_btn = wx.Button(self, label="Browse")
         browse_btn.Bind(wx.EVT_BUTTON, self._on_browse_repo)
         repo_row.Add(browse_btn, 0)
         grid.Add(repo_row, 1, wx.EXPAND)
@@ -80,12 +81,27 @@ class RepoSettingsDialog(wx.Dialog):
             pass
         grid.Add(self.dbl, 1, wx.EXPAND)
 
+        # Remote fetch staleness threshold (minutes).
+        grid.Add(wx.StaticText(self, label="Fetch stale timeout (minutes)"), 0, wx.ALIGN_CENTER_VERTICAL)
+        try:
+            v = int(getattr(cfg, "fetch_stale_minutes", 5) or 5)
+        except Exception:
+            v = 5
+        if v < 1:
+            v = 1
+        self.fetch_stale_minutes = wx.SpinCtrl(self, min=1, max=1440, initial=v)
+        try:
+            self.fetch_stale_minutes.SetToolTip("Remote status is treated as stale when the last fetch is older than this.")
+        except Exception:
+            pass
+        grid.Add(self.fetch_stale_minutes, 0, wx.EXPAND)
+
         root.Add(grid, 1, wx.ALL | wx.EXPAND, 10)
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        self.init_btn = wx.Button(self, label="Initialize database repo…")
+        self.init_btn = wx.Button(self, label="Initialize database repo")
         self.init_btn.Bind(wx.EVT_BUTTON, self._on_init_repo)
         btns.Add(self.init_btn, 0, wx.ALL, 10)
-        self.update_btn = wx.Button(self, label="Update repo tools…")
+        self.update_btn = wx.Button(self, label="Update repo tools")
         self.update_btn.Bind(wx.EVT_BUTTON, self._on_update_repo_tools)
         btns.Add(self.update_btn, 0, wx.ALL, 10)
         btns.AddStretchSpacer(1)
@@ -94,7 +110,10 @@ class RepoSettingsDialog(wx.Dialog):
         btns.Add(self.CreateButtonSizer(wx.OK | wx.CANCEL), 0, wx.ALL, 10)
         root.Add(btns, 0, wx.EXPAND)
         self.SetSizer(root)
-        self.SetMinSize((720, 260))
+        # Make this dialog comfortably usable on first open (especially now that it
+        # includes additional settings like fetch timeout).
+        self.SetMinSize((860, 360))
+        self.SetSize((1080, 520))
 
         self.Bind(wx.EVT_BUTTON, self._on_ok, id=wx.ID_OK)
 
@@ -222,6 +241,10 @@ class RepoSettingsDialog(wx.Dialog):
         if not dbl.endswith(".kicad_dbl"):
             dbl = dbl + ".kicad_dbl"
         self._cfg.dbl_filename = dbl
+        try:
+            self._cfg.fetch_stale_minutes = int(self.fetch_stale_minutes.GetValue() or 5)
+        except Exception:
+            self._cfg.fetch_stale_minutes = 5
         # Save repo-local settings into the database repo (portable across computers).
         try:
             if rp:
@@ -561,7 +584,7 @@ class ComponentDialogBase(wx.Dialog):
 
         if self._allow_copy_from_existing:
             tmpl_row = wx.BoxSizer(wx.HORIZONTAL)
-            tmpl_btn = wx.Button(self, label="Copy from existing…")
+            tmpl_btn = wx.Button(self, label="Copy from existing")
             tmpl_btn.Bind(wx.EVT_BUTTON, self._on_copy_from_existing)
             tmpl_hint = wx.StaticText(self, label="Prefill fields from an existing part in this category.")
             tmpl_row.Add(tmpl_btn, 0, wx.ALL, 6)

@@ -19,6 +19,8 @@ from .async_ui import UiDebouncer, UiRepeater, is_window_alive
 from .git_ops import (
     git_fetch_head_age_seconds,
     git_fetch_head_mtime,
+    format_age_minutes,
+    fetch_stale_threshold_seconds,
     git_status_entries,
     git_sync_ff_only,
     git_sync_status,
@@ -36,6 +38,7 @@ from .pending import (
 from .preview_panel import PreviewPanel
 from .requests import prompt_commit_message, submit_request
 from .services import category_title, load_csv_table, row_label, save_csv_table
+from .window_title import with_library_suffix
 
 try:
     from rapidfuzz import fuzz as _rf_fuzz  # type: ignore
@@ -47,13 +50,13 @@ except Exception:  # pragma: no cover
     _rf_utils = None
 
 
-class BrowseDialog(wx.Frame):
+class BrowseDialog(wx.Dialog):
     def __init__(self, parent: wx.Window, repo_path: str, category: Category):
-        # Top-level independent window (matches legacy ui.py behavior).
+        # Child dialog (subwindow) of the main plugin window.
         super().__init__(
-            None,
-            title=f"Browse: {category_title(category)}",
-            style=wx.DEFAULT_FRAME_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX | wx.CLIP_CHILDREN,
+            parent,
+            title=with_library_suffix(f"Browse: {category_title(category)}", repo_path),
+            style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX | wx.CLIP_CHILDREN,
         )
         self._repo_path = repo_path
         self._category = category
@@ -155,15 +158,29 @@ class BrowseDialog(wx.Frame):
 
         splitter.SplitVertically(left, right, sashPosition=760)
         splitter.SetMinimumPaneSize(350)
-        wx.CallAfter(lambda: splitter.SetSashPosition(-350))
+        # Avoid negative sash positions (can assert on some wx ports, notably macOS).
+        def _set_default_sash() -> None:
+            try:
+                w = int(splitter.GetClientSize().GetWidth() or 0)
+            except Exception:
+                w = 0
+            # Keep ~350px for the preview pane when possible.
+            right_w = 350
+            try:
+                pos = max(350, w - right_w) if w else 760
+                splitter.SetSashPosition(pos)
+            except Exception:
+                pass
+
+        wx.CallAfter(_set_default_sash)
         root.Add(splitter, 1, wx.ALL | wx.EXPAND, 8)
 
         # buttons (match legacy)
         btns = wx.BoxSizer(wx.HORIZONTAL)
-        add_btn = wx.Button(self, label="Add…")
-        edit_btn = wx.Button(self, label="Edit…")
+        add_btn = wx.Button(self, label="Add")
+        edit_btn = wx.Button(self, label="Edit")
         del_btn = wx.Button(self, label="Delete")
-        ds_btn = wx.Button(self, label="Open datasheet…")
+        ds_btn = wx.Button(self, label="Open datasheet")
         add_btn.Bind(wx.EVT_BUTTON, self._on_add)
         edit_btn.Bind(wx.EVT_BUTTON, self._on_edit)
         del_btn.Bind(wx.EVT_BUTTON, self._on_delete)
@@ -289,6 +306,16 @@ class BrowseDialog(wx.Frame):
         if isinstance(focus, wx.TextCtrl):
             evt.Skip()
             return
+        if key == wx.WXK_ESCAPE:
+            try:
+                if self.IsModal():
+                    self.EndModal(wx.ID_CANCEL)
+                else:
+                    self.Close()
+                return
+            except Exception:
+                evt.Skip()
+                return
         if key in (ord("D"), ord("d")):
             try:
                 self._on_open_datasheet(None)
@@ -320,6 +347,16 @@ class BrowseDialog(wx.Frame):
                 self._watch_repeater.stop()
             if getattr(self, "_search_debouncer", None):
                 self._search_debouncer.cancel()
+        except Exception:
+            pass
+        # When shown modally, end the modal loop so callers can Destroy() in a finally block.
+        try:
+            if self.IsModal():
+                try:
+                    self.EndModal(wx.ID_CANCEL)
+                    return
+                except Exception:
+                    pass
         except Exception:
             pass
         evt.Skip()
@@ -363,7 +400,7 @@ class BrowseDialog(wx.Frame):
             dirty = bool(st.get("dirty"))
             if stale:
                 age = st.get("age")
-                suffix = f" (last fetch {age}s ago)" if age is not None else ""
+                suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
                 self.status_icon.SetBitmap(self._bmp_gray)
                 self.status_lbl.SetLabel("Library status: unknown / stale — click Fetch remote" + suffix)
             elif bool(st.get("up_to_date")):
@@ -796,7 +833,7 @@ class BrowseDialog(wx.Frame):
         if self._remote_loaded or self._remote_loading or self._closing:
             return
         age = git_fetch_head_age_seconds(self._repo_path)
-        if age is None or age > 300:
+        if age is None or age > fetch_stale_threshold_seconds(self._repo_path):
             # Stale/unknown: don't try loading remote file.
             return
         self._remote_loading = True
@@ -1730,7 +1767,20 @@ class ComponentPickerDialog(wx.Dialog):
 
         splitter.SplitVertically(left, right, sashPosition=760)
         splitter.SetMinimumPaneSize(350)
-        wx.CallAfter(lambda: splitter.SetSashPosition(-350))
+        # Avoid negative sash positions (can assert on some wx ports, notably macOS).
+        def _set_default_sash() -> None:
+            try:
+                w = int(splitter.GetClientSize().GetWidth() or 0)
+            except Exception:
+                w = 0
+            right_w = 350
+            try:
+                pos = max(350, w - right_w) if w else 760
+                splitter.SetSashPosition(pos)
+            except Exception:
+                pass
+
+        wx.CallAfter(_set_default_sash)
         root.Add(splitter, 1, wx.ALL | wx.EXPAND, 8)
 
         btns = wx.BoxSizer(wx.HORIZONTAL)
@@ -1872,7 +1922,7 @@ class ComponentPickerDialog(wx.Dialog):
             dirty = bool(st.get("dirty"))
             if stale:
                 age = st.get("age")
-                suffix = f" (last fetch {age}s ago)" if age is not None else ""
+                suffix = f" (last fetch {format_age_minutes(age)})" if age is not None else ""
                 self.status_icon.SetBitmap(self._bmp_gray)
                 self.status_lbl.SetLabel("Library status: unknown / stale" + suffix)
             elif bool(st.get("up_to_date")):
@@ -1927,7 +1977,7 @@ class ComponentPickerDialog(wx.Dialog):
         if self._remote_loaded or self._remote_loading:
             return
         age = git_fetch_head_age_seconds(self._repo_path)
-        if age is None or age > 300:
+        if age is None or age > fetch_stale_threshold_seconds(self._repo_path):
             # Stale/unknown: don't try loading remote file.
             return
         self._remote_loading = True

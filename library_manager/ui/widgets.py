@@ -160,7 +160,7 @@ class MultiFootprintField(wx.Panel):
 
         actions = wx.BoxSizer(wx.HORIZONTAL)
         actions.AddStretchSpacer(1)
-        add_btn = wx.Button(self, label="Add footprint…")
+        add_btn = wx.Button(self, label="Add footprint")
         actions.Add(add_btn, 0)
         root.Add(actions, 0, wx.TOP | wx.EXPAND, 6)
         self.SetSizer(root)
@@ -550,7 +550,7 @@ class ComponentFormPanel(wx.Panel):
         # Browse-first UX: no dropdown (avoids huge suggestion lists).
         txt = wx.TextCtrl(panel, value=value)
         s.Add(txt, 1, wx.EXPAND)
-        pick_btn = wx.Button(panel, label="Browse…")
+        pick_btn = wx.Button(panel, label="Browse")
         s.Add(pick_btn, 0, wx.LEFT, 6)
 
         def on_pick(_evt: wx.CommandEvent) -> None:
@@ -826,7 +826,20 @@ class TemplatePickerDialog(wx.Dialog):
         right.SetSizer(right_s)
         splitter.SplitVertically(left, right, sashPosition=780)
         splitter.SetMinimumPaneSize(350)
-        wx.CallAfter(lambda: splitter.SetSashPosition(-350))
+        # Avoid negative sash positions (can assert on some wx ports, notably macOS).
+        def _set_default_sash() -> None:
+            try:
+                w = int(splitter.GetClientSize().GetWidth() or 0)
+            except Exception:
+                w = 0
+            right_w = 350
+            try:
+                pos = max(350, w - right_w) if w else 780
+                splitter.SetSashPosition(pos)
+            except Exception:
+                pass
+
+        wx.CallAfter(_set_default_sash)
         vbox.Add(splitter, 1, wx.ALL | wx.EXPAND, 8)
 
         btns = self.CreateSeparatedButtonSizer(wx.OK | wx.CANCEL)

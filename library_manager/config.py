@@ -40,6 +40,9 @@ class Config:
     # DBL filename under Database/ (e.g. "library.kicad_dbl").
     # Used by the repo initializer; existing repos may already have a different filename.
     dbl_filename: str = ""
+    # Treat remote status as "stale" if FETCH_HEAD is older than this many minutes.
+    # This avoids doing expensive diff/status work when we haven't fetched recently.
+    fetch_stale_minutes: int = 5
 
     @staticmethod
     def repo_settings_path(repo_path: str) -> str:
@@ -188,6 +191,7 @@ class Config:
                 github_repo=str(data.get("github_repo", "")),
                 github_base_branch=str(data.get("github_base_branch", "main")),
                 dbl_filename=str(data.get("dbl_filename", "")),
+                fetch_stale_minutes=int(data.get("fetch_stale_minutes", 5) or 5),
             )
         except FileNotFoundError:
             return Config()
@@ -239,6 +243,7 @@ class Config:
                     "github_repo": self.github_repo,
                     "github_base_branch": self.github_base_branch,
                     "dbl_filename": self.dbl_filename,
+                    "fetch_stale_minutes": int(self.fetch_stale_minutes or 5),
                 },
                 f,
                 indent=2,

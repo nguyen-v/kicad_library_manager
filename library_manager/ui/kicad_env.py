@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import glob as _glob
 import os
+import shutil as _shutil
 import subprocess
+import sys
 import threading
 
 from .._subprocess import SUBPROCESS_NO_WINDOW
@@ -9,6 +12,63 @@ from .._subprocess import SUBPROCESS_NO_WINDOW
 
 _KICAD_ENV_LOCK = threading.Lock()
 _KICAD_ENV_VARS: dict[str, str] | None = None
+_KICAD_CLI_PATH: str | None = None
+
+
+def resolve_kicad_cli() -> str:
+    """
+    Return an executable path for `kicad-cli`.
+
+    On macOS, KiCad is commonly installed as an app bundle and `kicad-cli` is not on PATH
+    inside KiCad's IPC plugin environment. This resolver searches common locations.
+
+    Override:
+      - set env var `KICAD_CLI` to the full path of the kicad-cli executable.
+    """
+    global _KICAD_CLI_PATH
+    if _KICAD_CLI_PATH:
+        return str(_KICAD_CLI_PATH)
+
+    # Explicit override.
+    try:
+        override = str(os.environ.get("KICAD_CLI") or "").strip()
+    except Exception:
+        override = ""
+    if override:
+        if os.path.isfile(override) and os.access(override, os.X_OK):
+            _KICAD_CLI_PATH = override
+            return override
+
+    # PATH lookup.
+    exe_name = "kicad-cli.exe" if sys.platform == "win32" else "kicad-cli"
+    p = _shutil.which(exe_name) or _shutil.which("kicad-cli")
+    if p:
+        _KICAD_CLI_PATH = p
+        return p
+
+    # macOS app bundle locations (KiCad 7/8/9).
+    if sys.platform == "darwin":
+        cands: list[str] = []
+        # System-wide app install(s)
+        cands.extend(sorted(_glob.glob("/Applications/KiCad*/KiCad.app/Contents/MacOS/kicad-cli")))
+        cands.extend(sorted(_glob.glob("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")))
+        # User-local Applications
+        home = os.path.expanduser("~")
+        cands.extend(sorted(_glob.glob(os.path.join(home, "Applications", "KiCad*.app", "Contents", "MacOS", "kicad-cli"))))
+        cands.extend(sorted(_glob.glob(os.path.join(home, "Applications", "KiCad.app", "Contents", "MacOS", "kicad-cli"))))
+        for cand in cands:
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                _KICAD_CLI_PATH = cand
+                return cand
+
+    raise RuntimeError(
+        "kicad-cli was not found.\n\n"
+        "Fix:\n"
+        "- Ensure KiCad is installed, and that `kicad-cli` is available, or\n"
+        "- Set environment variable KICAD_CLI to the full path of the kicad-cli executable.\n\n"
+        "On macOS, a common path is:\n"
+        "  /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
+    )
 
 
 def kicad_cli_env_vars() -> dict[str, str]:
@@ -16,7 +76,14 @@ def kicad_cli_env_vars() -> dict[str, str]:
     Best-effort read KiCad environment variables via kicad-cli.
     Matches ui.py behavior (tries `kicad-cli env` and `kicad-cli env vars`).
     """
-    cmds = [["kicad-cli", "env"], ["kicad-cli", "env", "vars"]]
+    exe = None
+    try:
+        exe = resolve_kicad_cli()
+    except Exception:
+        exe = None
+    if not exe:
+        return {}
+    cmds = [[exe, "env"], [exe, "env", "vars"]]
     for cmd in cmds:
         try:
             cp = subprocess.run(

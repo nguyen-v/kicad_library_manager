@@ -6,15 +6,52 @@ import traceback
 import datetime as _dt
 import json as _json
 
+_INSTANCE_CHECKER = None
 
-def _boot_log_path() -> str:
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    d = os.path.join(base, "kicad_library_manager")
+
+def _cache_root_dir() -> str:
+    """
+    Cross-platform user-local cache directory.
+    """
+    # Respect XDG when set (Linux and some macOS setups).
+    try:
+        xdg = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
+    except Exception:
+        xdg = ""
+    if xdg:
+        return xdg
+
+    home = os.path.expanduser("~")
+
+    # Windows: prefer LocalAppData.
+    if sys.platform == "win32":
+        try:
+            base = str(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or "").strip()
+        except Exception:
+            base = ""
+        if base:
+            return base
+        return os.path.join(home, "AppData", "Local")
+
+    # macOS: conventional cache location.
+    if sys.platform == "darwin":
+        return os.path.join(home, "Library", "Caches")
+
+    # Linux / other POSIX.
+    return os.path.join(home, ".cache")
+
+
+def _plugin_cache_dir() -> str:
+    d = os.path.join(_cache_root_dir(), "kicad_library_manager")
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:
         pass
-    return os.path.join(d, "ipc_plugin_boot.log")
+    return d
+
+
+def _boot_log_path() -> str:
+    return os.path.join(_plugin_cache_dir(), "ipc_plugin_boot.log")
 
 
 def _boot_log(msg: str) -> None:
@@ -30,13 +67,7 @@ def _boot_log(msg: str) -> None:
 
 
 def _pid_file_path() -> str:
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    d = os.path.join(base, "kicad_library_manager")
-    try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
-    return os.path.join(d, "ipc_plugin_pid.json")
+    return os.path.join(_plugin_cache_dir(), "ipc_plugin_pid.json")
 
 
 def _write_pid_file() -> None:
@@ -56,6 +87,138 @@ def _write_pid_file() -> None:
             f.write("\n")
     except Exception:
         return
+
+
+def _single_instance_dir() -> str:
+    """
+    Directory for the single-instance lock.
+    Keep consistent with other boot artifacts (PID file, boot log).
+    """
+    return _plugin_cache_dir()
+
+
+def _instance_user_key() -> str:
+    """
+    A stable per-user key for the lock name (cross-platform).
+    """
+    try:
+        return str(os.getuid())
+    except Exception:
+        pass
+    try:
+        u = str(os.environ.get("USERNAME") or os.environ.get("USER") or "").strip()
+        if u:
+            return u
+    except Exception:
+        pass
+    return "user"
+
+
+def _pid_is_alive(pid: int) -> bool:
+    """
+    Best-effort check whether a PID is alive.
+    """
+    try:
+        p = int(pid)
+    except Exception:
+        return False
+    if p <= 0:
+        return False
+    try:
+        # POSIX: signal 0 checks existence without sending a signal.
+        if hasattr(os, "kill"):
+            os.kill(p, 0)
+            return True
+    except PermissionError:
+        # Process exists but we can't signal it.
+        return True
+    except ProcessLookupError:
+        return False
+    except Exception:
+        pass
+    # Unknown platform / failure: do not claim alive.
+    return False
+
+
+def _read_existing_pid() -> int | None:
+    try:
+        p = _pid_file_path()
+        if not os.path.isfile(p):
+            return None
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            txt = f.read()
+        d = _json.loads(txt or "{}")
+        pid = d.get("pid")
+        return int(pid) if str(pid).isdigit() else None
+    except Exception:
+        return None
+
+
+def _ensure_single_instance_or_notify(app) -> bool:
+    """
+    Return True if this is the only running instance.
+    If another instance is running, show a message and return False.
+    """
+    global _INSTANCE_CHECKER
+    try:
+        import wx  # type: ignore
+
+        # One instance per user account (not per-project).
+        name = f"kicad_library_manager_single_instance_{_instance_user_key()}"
+        lock_path = os.path.join(_single_instance_dir(), name)
+        _INSTANCE_CHECKER = wx.SingleInstanceChecker(name, _single_instance_dir())
+        if _INSTANCE_CHECKER.IsAnotherRunning():
+            # If we can detect that the previous instance is gone, clear stale lock artifacts
+            # so we don't permanently lock out the user after a crash.
+            existing_pid = _read_existing_pid()
+            if existing_pid is not None and not _pid_is_alive(existing_pid):
+                try:
+                    os.remove(lock_path)
+                except Exception:
+                    pass
+                try:
+                    os.remove(_pid_file_path())
+                except Exception:
+                    pass
+                try:
+                    _INSTANCE_CHECKER = wx.SingleInstanceChecker(name, _single_instance_dir())
+                except Exception:
+                    _INSTANCE_CHECKER = None
+                try:
+                    if _INSTANCE_CHECKER and not _INSTANCE_CHECKER.IsAnotherRunning():
+                        return True
+                except Exception:
+                    pass
+
+            try:
+                pid_hint = f"\n\nDetected running PID: {existing_pid}" if existing_pid else ""
+                wx.MessageBox(
+                    "KiCad Library Manager is already running.\n\n"
+                    "Close the existing window before launching it again."
+                    + pid_hint
+                    + "\n\n"
+                    "If you can’t find the window, it may be hidden in the background.\n"
+                    "You can terminate it and try again.",
+                    "KiCad Library Manager",
+                    wx.OK | wx.ICON_INFORMATION,
+                )
+            except Exception:
+                pass
+            try:
+                # Best-effort release.
+                _INSTANCE_CHECKER = None
+            except Exception:
+                pass
+            try:
+                if wx.GetApp() is app and not wx.GetTopLevelWindows():
+                    app.ExitMainLoop()
+            except Exception:
+                pass
+            return False
+    except Exception:
+        # If the checker fails for any reason, do not block the plugin.
+        return True
+    return True
 
 
 def _ensure_sys_path_for_package() -> None:
@@ -93,7 +256,6 @@ def _show_error_dialog(title: str, message: str) -> None:
 def main() -> int:
     _boot_log("=== plugin start ===")
     _boot_log(f"pid={os.getpid()}")
-    _write_pid_file()
     try:
         # Always-on crash trace for this external IPC plugin process.
         from library_manager.debug import enable_segfault_trace_always  # type: ignore
@@ -152,6 +314,14 @@ def main() -> int:
 
     # Standalone process: we must create the wx App.
     app = wx.App(False)
+
+    # Ensure only one instance runs at a time (per user).
+    if not _ensure_single_instance_or_notify(app):
+        _boot_log("another instance detected; exiting")
+        return 0
+
+    # Only after passing the single-instance check, write PID file.
+    _write_pid_file()
 
     # Resolve project path from the running pcbnew instance via IPC.
     repo_path: str | None = None
