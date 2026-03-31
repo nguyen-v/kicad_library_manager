@@ -4,6 +4,7 @@ import base64
 import json
 import os
 import shutil
+import ssl
 import subprocess
 import sys
 import urllib.error
@@ -88,6 +89,17 @@ def _find_gh_executable() -> str | None:
     found = shutil.which("gh")
     if found:
         return found
+    if sys.platform == "darwin":
+        # KiCad.app may not inherit the full user PATH; check common locations.
+        mac_candidates = [
+            "/opt/homebrew/bin/gh",       # Apple Silicon Homebrew
+            "/usr/local/bin/gh",          # Intel Homebrew / manual install
+            "/opt/local/bin/gh",          # MacPorts
+        ]
+        for c in mac_candidates:
+            if os.path.isfile(c):
+                return c
+        return None
     if sys.platform != "win32":
         return None
     # Common Windows install locations for gh CLI.
@@ -157,6 +169,33 @@ def get_token() -> str:
     )
 
 
+def _make_ssl_context() -> ssl.SSLContext:
+    """Build an SSL context that works inside KiCad's bundled Python on macOS."""
+    ctx = ssl.create_default_context()
+    # On macOS the bundled Python often can't locate the system cert store.
+    # Try certifi first, then well-known cert file locations.
+    try:
+        import certifi  # noqa: F811
+        ctx.load_verify_locations(certifi.where())
+        return ctx
+    except Exception:
+        pass
+    for ca in (
+        "/etc/ssl/cert.pem",                    # macOS system certs
+        "/opt/homebrew/etc/openssl/cert.pem",    # Homebrew Apple Silicon
+        "/usr/local/etc/openssl/cert.pem",       # Homebrew Intel
+        "/opt/local/etc/openssl/cert.pem",       # MacPorts
+        "/etc/ssl/certs/ca-certificates.crt",    # Debian/Ubuntu
+    ):
+        if os.path.isfile(ca):
+            try:
+                ctx.load_verify_locations(ca)
+                return ctx
+            except Exception:
+                continue
+    return ctx
+
+
 def _request(method: str, url: str, token: str, payload: dict | None = None) -> dict:
     data = None
     if payload is not None:
@@ -169,7 +208,7 @@ def _request(method: str, url: str, token: str, payload: dict | None = None) -> 
         req.add_header("Content-Type", "application/json")
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=30, context=_make_ssl_context()) as resp:
             body = resp.read().decode("utf-8")
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as e:

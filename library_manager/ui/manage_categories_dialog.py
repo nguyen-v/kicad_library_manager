@@ -963,12 +963,16 @@ class ManageCategoriesDialog(wx.Dialog):
         msg = prompt_commit_message(self, default=f"request: add category {cat_name}")
         if msg is None:
             return
-        req_path = submit_request(
-            cfg,
-            action="category_add",
-            payload={"category": cat_name, "prefix": prefix, "width": width, "fields": fields},
-            commit_message=msg,
-        )
+        try:
+            req_path = submit_request(
+                cfg,
+                action="category_add",
+                payload={"category": cat_name, "prefix": prefix, "width": width, "fields": fields},
+                commit_message=msg,
+            )
+        except Exception as exc:
+            wx.MessageBox(f"Failed to submit category request:\n\n{exc}", "KiCad Library Manager", wx.OK | wx.ICON_ERROR)
+            return
         PENDING.add(
             cat_name,
             {
@@ -1069,12 +1073,16 @@ class ManageCategoriesDialog(wx.Dialog):
         msg = prompt_commit_message(self, default=f"request: update category {cat_name}")
         if msg is None:
             return
-        req_path = submit_request(
-            cfg,
-            action="category_update",
-            payload={"category": cat_name, "prefix": new_prefix, "width": int(new_width or 7), "fields": new_fields},
-            commit_message=msg,
-        )
+        try:
+            req_path = submit_request(
+                cfg,
+                action="category_update",
+                payload={"category": cat_name, "prefix": new_prefix, "width": int(new_width or 7), "fields": new_fields},
+                commit_message=msg,
+            )
+        except Exception as exc:
+            wx.MessageBox(f"Failed to submit category request:\n\n{exc}", "KiCad Library Manager", wx.OK | wx.ICON_ERROR)
+            return
         PENDING.add(
             cat_name,
             {
@@ -1122,7 +1130,11 @@ class ManageCategoriesDialog(wx.Dialog):
         msg = prompt_commit_message(self, default=f"request: delete category {cat}")
         if msg is None:
             return
-        req_path = submit_request(cfg, action="category_delete", payload={"category": cat}, commit_message=msg)
+        try:
+            req_path = submit_request(cfg, action="category_delete", payload={"category": cat}, commit_message=msg)
+        except Exception as exc:
+            wx.MessageBox(f"Failed to submit category request:\n\n{exc}", "KiCad Library Manager", wx.OK | wx.ICON_ERROR)
+            return
         PENDING.add(
             cat,
             {
