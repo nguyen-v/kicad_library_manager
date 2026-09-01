@@ -7,11 +7,39 @@ An IPC plugin for KiCad for managing local database (sqlite libraries) across ma
 - browse/edit parts and browse symbols/footprints with previews
 - initialize a brand-new database repo with the required CI scaffolding
 
-**Requirements:** Python 3.12+ (bundled with KiCad 9)
+**Requirements:** KiCad 9.0+ (PCB Editor), with the **KiCad API** enabled.
+
+This is an **IPC** plugin (`plugin.json`), not a legacy SWIG action plugin. It only appears in the **PCB Editor** toolbar / **Tools → External Plugins**.
 
 ---
 
 ### 1) Install the plugin
+
+#### 0) One-time prerequisites
+
+**All platforms**
+
+1. Open KiCad → **Preferences → Plugins**
+2. Enable **Enable KiCad API** (API server)
+3. On Linux, set the Python interpreter to your system `python3` if it is empty (often `/usr/bin/python3`)
+
+**Linux (Debian/Ubuntu) — required for automatic dependency install**
+
+KiCad creates a per-plugin virtualenv and runs `pip install -r requirements.txt`. That needs a working `pip`/`venv`, and wxPython must come from the distro (not from pip):
+
+```bash
+sudo apt install python3-pip python3-venv python3-wxgtk4.0
+```
+
+If you have this repo (or the PCM-installed plugin folder) checked out:
+
+```bash
+sudo ./scripts/setup_ipc_linux.sh
+```
+
+PCM installs typically land under:
+
+`~/.local/share/kicad/9.0/3rdparty/plugins/com_github_nguyen-v_kicad-library-manager/kicad_library_manager/`
 
 #### Recommended: KiCad Plugin and Content Manager (PCM)
 
@@ -24,20 +52,25 @@ An IPC plugin for KiCad for managing local database (sqlite libraries) across ma
 4. In the repository dropdown, select **nguyen-v's KiCad PCM repository**
 5. Under **Plugins**, find **KiCad Library Manager** and click **Install**
 6. Click **Apply Pending Changes**
-7. Restart KiCad
+7. Restart KiCad, then open the **PCB Editor**
 
-The plugin is available under **Tools → External Plugins → KiCad Library Manager**.
+On first PCB launch, wait ~30–60s while KiCad creates the plugin environment. The button then appears under **Tools → External Plugins → KiCad Library Manager** (and on the PCB toolbar).
 
 #### Alternative: manual install
 
-Install by copying (or symlinking) the **entire** `kicad_library_manager/` folder into your KiCad IPC plugins directory
-(the folder that will contain `plugin.json`).
+Copy or symlink the **entire** repo folder into the KiCad **IPC** plugins directory so that `plugin.json` is at:
 
-KiCad's IPC plugins directory is typically under your KiCad documents home, e.g.:
+```text
+…/plugins/kicad_library_manager/plugin.json
+```
+
+KiCad IPC plugins directory (KiCad 9):
 
 - **Linux**: `~/.local/share/kicad/9.0/plugins/`
 - **macOS**: `~/Documents/KiCad/9.0/plugins/`
-- **Windows**: `%USERPROFILE%\Documents\KiCad\9.0\scripting\plugins\`
+- **Windows**: `%USERPROFILE%\Documents\KiCad\9.0\plugins\`
+
+Do **not** install into `scripting/plugins/` — that path is for legacy SWIG plugins and will not register this IPC plugin.
 
 ##### Linux / macOS (symlink recommended during development)
 
@@ -50,10 +83,32 @@ ln -sfn "$(pwd)" "$PLUGDIR/kicad_library_manager"
 
 ##### Windows (copy recommended)
 
-Copy this `kicad_library_manager/` folder into your KiCad IPC plugins folder.
+Copy this `kicad_library_manager/` folder into `%USERPROFILE%\Documents\KiCad\9.0\plugins\`.
 
-Restart KiCad. The plugin is available under **Tools → External Plugins → KiCad Library Manager**
-(menu location may vary slightly between editors).
+Restart KiCad, open the **PCB Editor**, and wait for the first-time plugin environment setup.
+
+#### Troubleshooting: no toolbar icon / empty External Plugins
+
+Usually the plugin was found, but its Python environment failed to finish installing (empty venv / no `pip` / failed deps).
+
+1. Confirm API is enabled (**Preferences → Plugins**).
+2. Confirm you are in the **PCB Editor** (not Schematic).
+3. Confirm install path contains `plugin.json` under `…/9.0/plugins/…` (not `scripting/plugins`).
+4. On Linux, run `sudo ./scripts/setup_ipc_linux.sh`, then:
+
+```bash
+./scripts/repair_plugin_env.sh
+```
+
+5. Fully quit KiCad/PCB and reopen the PCB Editor.
+
+The plugin env lives at:
+
+- Linux: `~/.cache/kicad/9.0/python-environments/com.github.nguyen-v.kicad-library-manager/`
+- macOS: `~/Library/Caches/kicad/9.0/python-environments/…`
+- Windows: `%LOCALAPPDATA%\kicad\9.0\python-environments\…`
+
+In PCB Editor → **Preferences → Plugins**, you can also right-click the plugin action → **Recreate Plugin Environment**.
 
 ---
 

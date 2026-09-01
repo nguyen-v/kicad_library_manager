@@ -1,3 +1,10 @@
+# Installed automatically by KiCad into the per-plugin virtualenv
+# (~/.cache/kicad/9.0/python-environments/<identifier>/ on Linux).
+#
+# Do NOT pin wxPython here. On Linux, KiCad creates the venv with
+# --system-site-packages and wx comes from distro packages (e.g.
+# python3-wxgtk4.0). Pip-installing wxPython often fails or builds from
+# source and prevents the plugin toolbar button from ever appearing.
+# On Windows/macOS, use KiCad's bundled Python interpreter (includes wx).
 kicad-python>=0.1
 rapidfuzz>=3.0
-wxPython==4.2.1

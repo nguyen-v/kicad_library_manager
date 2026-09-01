@@ -2,7 +2,7 @@
     "$schema": "https://go.kicad.org/pcm/schemas/v1",
     "name": "KiCad Library Manager",
     "description": "Manage a shared KiCad DBL parts library with requests/sync and previews.",
-    "description_full": "An IPC plugin for KiCad that manages a shared database-backed library repo (sqlite/DBL) across multiple users. Includes request submission via GitHub, repo sync helpers, browsing/editing parts, and bootstrap tools for a new DB repo.",
+    "description_full": "An IPC plugin for KiCad 9+ (PCB Editor) that manages a shared database-backed library repo (sqlite/DBL) across multiple users. Includes request submission via GitHub, repo sync helpers, browsing/editing parts, and bootstrap tools for a new DB repo. Requires Preferences → Plugins → Enable KiCad API. On Linux, install python3-pip, python3-venv, and python3-wxgtk4.0 so KiCad can create the plugin Python environment (do not pip-install wxPython).",
     "identifier": "com.github.nguyen-v.kicad-library-manager",
     "type": "plugin",
     "author": {
