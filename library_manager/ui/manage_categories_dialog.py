@@ -24,7 +24,7 @@ from .git_ops import (
 )
 from .icons import make_status_bitmap
 from .pending import PENDING, reconcile_pending_against_local_csv, update_pending_states_after_fetch
-from .requests import prompt_commit_message, submit_request
+from .requests import submit_request_with_optional_local_ci
 from .window_title import with_library_suffix
 
 
@@ -960,15 +960,16 @@ class ManageCategoriesDialog(wx.Dialog):
         finally:
             wiz.Destroy()
 
-        msg = prompt_commit_message(self, default=f"request: add category {cat_name}")
-        if msg is None:
-            return
-        req_path = submit_request(
+        req_path = submit_request_with_optional_local_ci(
+            self,
             cfg,
+            repo_path=self._repo_path,
             action="category_add",
             payload={"category": cat_name, "prefix": prefix, "width": width, "fields": fields},
-            commit_message=msg,
+            default=f"request: add category {cat_name}",
         )
+        if req_path is None:
+            return
         PENDING.add(
             cat_name,
             {
@@ -1066,15 +1067,16 @@ class ManageCategoriesDialog(wx.Dialog):
         finally:
             wiz.Destroy()
 
-        msg = prompt_commit_message(self, default=f"request: update category {cat_name}")
-        if msg is None:
-            return
-        req_path = submit_request(
+        req_path = submit_request_with_optional_local_ci(
+            self,
             cfg,
+            repo_path=self._repo_path,
             action="category_update",
             payload={"category": cat_name, "prefix": new_prefix, "width": int(new_width or 7), "fields": new_fields},
-            commit_message=msg,
+            default=f"request: update category {cat_name}",
         )
+        if req_path is None:
+            return
         PENDING.add(
             cat_name,
             {
@@ -1119,10 +1121,16 @@ class ManageCategoriesDialog(wx.Dialog):
         if not (cfg.github_owner.strip() and cfg.github_repo.strip()):
             wx.MessageBox("GitHub is not configured. Click Settings… first.", "Delete category", wx.OK | wx.ICON_WARNING)
             return
-        msg = prompt_commit_message(self, default=f"request: delete category {cat}")
-        if msg is None:
+        req_path = submit_request_with_optional_local_ci(
+            self,
+            cfg,
+            repo_path=self._repo_path,
+            action="category_delete",
+            payload={"category": cat},
+            default=f"request: delete category {cat}",
+        )
+        if req_path is None:
             return
-        req_path = submit_request(cfg, action="category_delete", payload={"category": cat}, commit_message=msg)
         PENDING.add(
             cat,
             {

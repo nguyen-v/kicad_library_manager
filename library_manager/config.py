@@ -43,6 +43,8 @@ class Config:
     # Treat remote status as "stale" if FETCH_HEAD is older than this many minutes.
     # This avoids doing expensive diff/status work when we haven't fetched recently.
     fetch_stale_minutes: int = 30
+    # When True, pre-check "Process locally (skip GitHub CI)" on request commit dialogs.
+    process_requests_locally: bool = False
 
     @staticmethod
     def repo_settings_path(repo_path: str) -> str:
@@ -192,6 +194,7 @@ class Config:
                 github_base_branch=str(data.get("github_base_branch", "main")),
                 dbl_filename=str(data.get("dbl_filename", "")),
                 fetch_stale_minutes=int(data.get("fetch_stale_minutes", 30) or 30),
+                process_requests_locally=bool(data.get("process_requests_locally", False)),
             )
         except FileNotFoundError:
             return Config()
@@ -244,6 +247,7 @@ class Config:
                     "github_base_branch": self.github_base_branch,
                     "dbl_filename": self.dbl_filename,
                     "fetch_stale_minutes": int(self.fetch_stale_minutes or 5),
+                    "process_requests_locally": bool(self.process_requests_locally),
                 },
                 f,
                 indent=2,

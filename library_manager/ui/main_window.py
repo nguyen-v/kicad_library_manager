@@ -1311,12 +1311,13 @@ class MainDialog(wx.Frame):
                     try:
                         from .requests import prompt_commit_message
 
-                        cm = prompt_commit_message(self, default=default)
+                        cm_res = prompt_commit_message(self, default=default, allow_local_ci=False)
                     except Exception:
-                        cm = None
-                    if not cm:
+                        cm_res = None
+                    if not cm_res:
                         self._append_log("Sync cancelled (assets not published).")
                         return
+                    cm = cm_res.message
 
                     br = (self._cfg.github_base_branch or "main").strip() or "main"
 

@@ -38,7 +38,7 @@ from .pending import (
     update_pending_states_after_fetch,
 )
 from .preview_panel import PreviewPanel
-from .requests import prompt_commit_message, submit_request
+from .requests import submit_request_with_optional_local_ci
 from .services import category_title, load_csv_table, row_label, save_csv_table
 from .window_title import with_library_suffix
 
@@ -1284,11 +1284,17 @@ class BrowseDialog(wx.Dialog):
             wx.MessageBox("GitHub is not configured. Click Settings… first.", "Add component", wx.OK | wx.ICON_WARNING)
             return
         try:
-            msg = prompt_commit_message(self, default=f"request: add {self._category.display_name} part")
-            if msg is None:
-                return
             fields = {k: (v or "") for k, v in (row or {}).items() if str(k) != "IPN"}
-            req_path = submit_request(cfg, action="add", payload={"category": self._category.display_name, "fields": fields}, commit_message=msg)
+            req_path = submit_request_with_optional_local_ci(
+                self,
+                cfg,
+                repo_path=self._repo_path,
+                action="add",
+                payload={"category": self._category.display_name, "fields": fields},
+                default=f"request: add {self._category.display_name} part",
+            )
+            if req_path is None:
+                return
             try:
                 br = (Config.load_effective(self._repo_path).github_base_branch.strip() or "main")
             except Exception:
@@ -1371,10 +1377,16 @@ class BrowseDialog(wx.Dialog):
             wx.MessageBox("GitHub is not configured. Click Settings… first.", "Edit component", wx.OK | wx.ICON_WARNING)
             return
         try:
-            msg = prompt_commit_message(self, default=f"request: update {ipn}")
-            if msg is None:
+            req_path = submit_request_with_optional_local_ci(
+                self,
+                cfg,
+                repo_path=self._repo_path,
+                action="update",
+                payload={"ipn": ipn, "set": dict(set_fields)},
+                default=f"request: update {ipn}",
+            )
+            if req_path is None:
                 return
-            req_path = submit_request(cfg, action="update", payload={"ipn": ipn, "set": dict(set_fields)}, commit_message=msg)
             try:
                 br = (Config.load_effective(self._repo_path).github_base_branch.strip() or "main")
             except Exception:
@@ -1438,10 +1450,16 @@ class BrowseDialog(wx.Dialog):
             wx.MessageBox("GitHub is not configured. Click Settings… first.", "Delete component", wx.OK | wx.ICON_WARNING)
             return
         try:
-            msg = prompt_commit_message(self, default=f"request: delete {ipn}")
-            if msg is None:
+            req_path = submit_request_with_optional_local_ci(
+                self,
+                cfg,
+                repo_path=self._repo_path,
+                action="delete",
+                payload={"ipn": ipn},
+                default=f"request: delete {ipn}",
+            )
+            if req_path is None:
                 return
-            req_path = submit_request(cfg, action="delete", payload={"ipn": ipn}, commit_message=msg)
             try:
                 br = (Config.load_effective(self._repo_path).github_base_branch.strip() or "main")
             except Exception:

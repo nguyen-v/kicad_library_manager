@@ -846,8 +846,8 @@ class AssetBrowserDialogBase(wx.Dialog):
                     )
                 if assets0 and suggest_assets_commit_message and prompt_commit_message:
                     default = suggest_assets_commit_message(entries0)
-                    cm = prompt_commit_message(self, default=default)
-                    if not cm:
+                    cm_res = prompt_commit_message(self, default=default, allow_local_ci=False)
+                    if not cm_res:
                         # Cancelled by user.
                         try:
                             self._assets_label.SetLabel(f"{self._p.kind_label}: sync cancelled")
@@ -859,7 +859,7 @@ class AssetBrowserDialogBase(wx.Dialog):
                         except Exception:
                             pass
                         return
-                    publish_cm = str(cm)
+                    publish_cm = str(cm_res.message)
         except Exception as e:
             try:
                 self.sync_btn.Enable(True)
