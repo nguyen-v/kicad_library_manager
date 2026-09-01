@@ -42,6 +42,7 @@ from .git_ops import (
     run_git,
 )
 from .icons import make_status_bitmap
+from .linux_deps import maybe_offer_linux_host_deps_on_startup
 from .pending import (
     PENDING,
     drop_applied_pending_if_already_synced,
@@ -659,6 +660,13 @@ class MainDialog(wx.Frame):
                 # Don't start polling while repo is in setup mode.
                 if not bool(getattr(self, "_setup_mode", False)):
                     self._start_remote_polling()
+                # Once per process: offer to install librsvg/ODBC via pkexec on Linux.
+                if not bool(getattr(self, "_linux_deps_prompted", False)):
+                    self._linux_deps_prompted = True
+                    try:
+                        wx.CallAfter(maybe_offer_linux_host_deps_on_startup, self)
+                    except Exception:
+                        pass
             else:
                 self._stop_remote_polling()
         finally:

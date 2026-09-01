@@ -21,10 +21,10 @@ if ! command -v python3 >/dev/null 2>&1; then
   exit 1
 fi
 
-# Prefer distro packages that make venv+pip+wx work on Debian/Ubuntu.
+# Prefer distro packages that make venv+pip+wx+previews+ODBC work on Debian/Ubuntu.
 if command -v apt-get >/dev/null 2>&1; then
-  echo "Ensuring python3-pip / python3-venv / python3-wxgtk4.0 ..."
-  "${SCRIPT_DIR}/setup_ipc_linux.sh"
+  echo "Ensuring Linux host packages (IPC + librsvg + ODBC) ..."
+  "${SCRIPT_DIR}/setup_linux.sh"
 fi
 
 echo "Removing old env (if any): ${ENV_DIR}"

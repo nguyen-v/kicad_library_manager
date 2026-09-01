@@ -7,7 +7,7 @@ from typing import Callable
 import wx
 
 from .async_ui import UiDebouncer
-from .assets.preview import cached_svg_and_png, hires_target_px, letterbox_bitmap, wx_image_silent
+from .assets.preview import cached_svg_and_png, hires_target_px, letterbox_bitmap, letterbox_image, wx_image_silent
 
 
 class PreviewPanel(wx.Panel):
@@ -113,7 +113,11 @@ class PreviewPanel(wx.Panel):
         except Exception:
             return
         msg = str(err or "").strip()
-        if "No SVG->PNG converter found" not in msg:
+        # Also treat the common wxGTK ConvertToBitmap failure as "need external converter",
+        # in case an older build still hits that path.
+        if ("No SVG->PNG converter found" not in msg) and (
+            "Failed to gain raw access to bitmap data" not in msg
+        ):
             return
         try:
             self._install_hint_shown = True
@@ -121,7 +125,24 @@ class PreviewPanel(wx.Panel):
             pass
 
         plat = str(sys.platform or "").lower()
-        if plat.startswith("darwin"):
+        if plat.startswith("linux"):
+            # Offer one-click install (pkexec/sudo) instead of a static hint.
+            try:
+                from .linux_deps import offer_install_linux_host_deps
+
+                offer_install_linux_host_deps(self, force=True)
+                return
+            except Exception:
+                pass
+            body = (
+                "Preview rendering needs an SVG rasterizer.\n\n"
+                "Debian/Ubuntu:\n"
+                "  sudo ./scripts/setup_linux.sh\n"
+                "or:\n"
+                "  sudo apt install librsvg2-bin\n\n"
+                "Then restart KiCad."
+            )
+        elif plat.startswith("darwin"):
             body = (
                 "Preview rendering needs an SVG rasterizer.\n\n"
                 "Recommended (Homebrew):\n"
@@ -353,41 +374,79 @@ class PreviewPanel(wx.Panel):
                     return
                 try:
                     # IMPORTANT: wx objects must be created on the UI thread (KiCad/wx can segfault otherwise).
+                    # Prefer Image-space letterboxing: wxGTK often fails Bitmap.ConvertToImage /
+                    # alpha MemoryDC with "Failed to gain raw access to bitmap data".
                     bmp: wx.Bitmap | None = None
+                    w, h = self.bmp.GetClientSize()
                     if png_path:
                         img = wx_image_silent(png_path)
                         if not img.IsOk():
                             raise RuntimeError("PNG load failed")
+                        boxed_img = letterbox_image(
+                            img,
+                            w,
+                            h,
+                            padding=self._letterbox_padding,
+                            crop_to_alpha=self._crop_to_alpha,
+                        )
+                        use_img = boxed_img if (boxed_img is not None and boxed_img.IsOk()) else img
                         try:
-                            bmp = wx.Bitmap(img)
+                            bmp = wx.Bitmap(use_img)
                         except Exception:
                             # Fallback: some wx ports fail to create a bitmap from a wx.Image.
                             try:
                                 bmp = wx.Bitmap(png_path, wx.BITMAP_TYPE_PNG)
                             except Exception as e:
                                 raise RuntimeError(f"PNG bitmap creation failed: {e}") from e
+                            bmp = letterbox_bitmap(
+                                bmp,
+                                w,
+                                h,
+                                padding=self._letterbox_padding,
+                                crop_to_alpha=self._crop_to_alpha,
+                            ) or bmp
                     elif svg_path:
-                        # Fallback: render SVG directly using wx's SVG renderer (when available).
+                        # External SVG->PNG converter was missing. On wxGTK,
+                        # wx.svg.SVGimage.ConvertToBitmap() commonly fails with
+                        # "Failed to gain raw access to bitmap data" (FromBufferRGBA),
+                        # so do not use it as a silent fallback — ask for rsvg/inkscape.
+                        if str(sys.platform or "").lower().startswith("linux"):
+                            raise RuntimeError(
+                                "No SVG->PNG converter found (install rsvg-convert or inkscape)"
+                            )
                         try:
                             import wx.svg as _wxsvg  # type: ignore
                         except Exception:
                             _wxsvg = None  # type: ignore
                         if not _wxsvg:
-                            raise RuntimeError("No SVG->PNG converter found (install rsvg-convert or inkscape)")
+                            raise RuntimeError(
+                                "No SVG->PNG converter found (install rsvg-convert or inkscape)"
+                            )
                         try:
                             svg_img = _wxsvg.SVGimage.CreateFromFile(svg_path)
                         except Exception as e:
                             raise RuntimeError(f"SVG load failed: {e}") from e
                         try:
-                            bmp = svg_img.ConvertToBitmap(int(png_w), int(png_h))
-                        except Exception:
-                            # Some wx builds provide ConvertToBitmap() without sizing.
-                            bmp = svg_img.ConvertToBitmap()
+                            try:
+                                bmp = svg_img.ConvertToBitmap(int(png_w), int(png_h))
+                            except Exception:
+                                # Some wx builds provide ConvertToBitmap() without sizing.
+                                bmp = svg_img.ConvertToBitmap()
+                        except Exception as e:
+                            raise RuntimeError(
+                                "No SVG->PNG converter found (install rsvg-convert or inkscape)"
+                            ) from e
+                        if bmp and bmp.IsOk():
+                            bmp = letterbox_bitmap(
+                                bmp,
+                                w,
+                                h,
+                                padding=self._letterbox_padding,
+                                crop_to_alpha=self._crop_to_alpha,
+                            ) or bmp
                     if not bmp or not bmp.IsOk():
                         raise RuntimeError("Bitmap render failed")
-                    w, h = self.bmp.GetClientSize()
-                    boxed = letterbox_bitmap(bmp, w, h, padding=self._letterbox_padding, crop_to_alpha=self._crop_to_alpha)
-                    self.bmp.SetBitmap(boxed or bmp)
+                    self.bmp.SetBitmap(bmp)
                     self.bmp.Refresh()
                     # Even for resize-triggered rerenders (set_status=False), clear a stale
                     # "Rendering…" label if we successfully updated the bitmap.

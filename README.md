@@ -23,23 +23,25 @@ This is an **IPC** plugin (`plugin.json`), not a legacy SWIG action plugin. It o
 2. Enable **Enable KiCad API** (API server)
 3. On Linux, set the Python interpreter to your system `python3` if it is empty (often `/usr/bin/python3`)
 
-**Linux (Debian/Ubuntu) — required for automatic dependency install**
+**Linux (Debian/Ubuntu) — one-time host packages**
 
-KiCad creates a per-plugin virtualenv and runs `pip install -r requirements.txt`. That needs a working `pip`/`venv`, and wxPython must come from the distro (not from pip):
-
-```bash
-sudo apt install python3-pip python3-venv python3-wxgtk4.0
-```
-
-If you have this repo (or the PCM-installed plugin folder) checked out:
+KiCad’s IPC plugin venv needs `pip`/`venv`/`wx`, previews need `rsvg-convert`, and KiCad DBL needs the SQLite ODBC driver. Install everything with:
 
 ```bash
-sudo ./scripts/setup_ipc_linux.sh
+sudo ./scripts/setup_linux.sh
 ```
 
-PCM installs typically land under:
+(PCM install path is usually  
+`~/.local/share/kicad/9.0/3rdparty/plugins/com_github_nguyen-v_kicad-library-manager/kicad_library_manager/`.)
 
-`~/.local/share/kicad/9.0/3rdparty/plugins/com_github_nguyen-v_kicad-library-manager/kicad_library_manager/`
+On first open, the plugin also detects missing Linux packages and can install them via a password prompt (`pkexec`). You can decline; it won’t ask again until you clear the skip marker or run the script manually.
+
+Equivalent packages if you prefer apt directly:
+
+```bash
+sudo apt install python3-pip python3-venv python3-wxgtk4.0 librsvg2-bin unixodbc libsqliteodbc
+sudo ./scripts/setup_odbc_linux.sh   # registers "SQLite3 ODBC Driver"
+```
 
 #### Recommended: KiCad Plugin and Content Manager (PCM)
 
@@ -94,7 +96,7 @@ Usually the plugin was found, but its Python environment failed to finish instal
 1. Confirm API is enabled (**Preferences → Plugins**).
 2. Confirm you are in the **PCB Editor** (not Schematic).
 3. Confirm install path contains `plugin.json` under `…/9.0/plugins/…` (not `scripting/plugins`).
-4. On Linux, run `sudo ./scripts/setup_ipc_linux.sh`, then:
+4. On Linux, run `sudo ./scripts/setup_linux.sh`, then:
 
 ```bash
 ./scripts/repair_plugin_env.sh
@@ -242,14 +244,20 @@ After installing, the "SQLite3 ODBC Driver" name is typically available for ODBC
 
 #### Linux (Debian/Ubuntu)
 
-Run:
+Preferred (also installs IPC + preview packages):
+
+```bash
+sudo ./scripts/setup_linux.sh
+```
+
+ODBC-only:
 
 ```bash
 sudo ./scripts/setup_odbc_linux.sh
 ```
 
 This installs `unixodbc` + `libsqliteodbc` and registers the driver in `/etc/odbcinst.ini` under the name
-`SQLite3 ODBC Driver`.
+`SQLite3 ODBC Driver`. The plugin will also offer to run this setup on first launch if the driver is missing.
 
 #### macOS (Homebrew)
 
@@ -272,6 +280,20 @@ This installs the Homebrew `sqliteodbc` formula (which depends on `unixodbc`) an
 The plugin’s symbol/footprint previews render SVGs and then rasterize them for display.
 On some systems (especially macOS), you may need to install an SVG rasterizer.
 
+#### Linux
+
+On Debian/Ubuntu, `sudo ./scripts/setup_linux.sh` already installs `librsvg2-bin`.
+If previews still fail, install just the rasterizer:
+
+```bash
+sudo apt install librsvg2-bin
+```
+
+- Fedora: `sudo dnf install librsvg2-tools`
+- Arch: `sudo pacman -S librsvg`
+
+The plugin prompts to install missing preview tools when it detects the failure.
+
 #### macOS (Homebrew)
 
 ```bash
@@ -285,20 +307,6 @@ brew install --cask inkscape
 ```
 
 Restart KiCad after installing.
-
-#### Linux
-
-- Debian/Ubuntu:
-
-```bash
-sudo apt install librsvg2-bin
-```
-
-- Fedora:
-
-```bash
-sudo dnf install librsvg2-tools
-```
 
 #### Windows
 
