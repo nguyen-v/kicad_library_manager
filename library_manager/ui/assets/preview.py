@@ -239,6 +239,82 @@ def _crop_image_to_alpha(img: wx.Image, *, alpha_threshold: int = 5, pad_px: int
         return img
 
 
+def _transparent_image(width: int, height: int) -> wx.Image:
+    """Create a fully transparent RGBA wx.Image without using MemoryDC/bitmaps."""
+    w = max(int(width), 1)
+    h = max(int(height), 1)
+    img = wx.Image(w, h, clear=True)
+    try:
+        if not img.HasAlpha():
+            img.InitAlpha()
+    except Exception:
+        pass
+    try:
+        # Fully transparent.
+        img.SetAlpha(bytes(w * h))
+    except Exception:
+        try:
+            # Older/alternate wx bindings accept a mutable buffer.
+            buf = bytearray(w * h)
+            img.SetAlpha(buf)  # type: ignore[arg-type]
+        except Exception:
+            pass
+    return img
+
+
+def letterbox_image(
+    src: wx.Image,
+    box_w: int,
+    box_h: int,
+    padding: float = 0.92,
+    *,
+    crop_to_alpha: bool = False,
+) -> wx.Image | None:
+    """
+    Scale `src` into a transparent box using wx.Image only.
+
+    Avoids Bitmap.ConvertToImage / alpha MemoryDC, which often fail on wxGTK
+    ("Failed to gain raw access to bitmap data").
+    """
+    try:
+        if not src or not src.IsOk():
+            return None
+        img = src
+        if crop_to_alpha:
+            img = _crop_image_to_alpha(img)
+            if not img or not img.IsOk():
+                return None
+        bw = max(int(box_w), 50)
+        bh = max(int(box_h), 50)
+        sw, sh = int(img.GetWidth()), int(img.GetHeight())
+        if sw <= 0 or sh <= 0:
+            return None
+        scale = min((bw * float(padding)) / sw, (bh * float(padding)) / sh)
+        tw = max(int(sw * scale), 1)
+        th = max(int(sh * scale), 1)
+        try:
+            scaled = img.Scale(tw, th, quality=wx.IMAGE_QUALITY_HIGH)
+        except Exception:
+            scaled = img.Scale(tw, th)
+        if not scaled or not scaled.IsOk():
+            return None
+        try:
+            tw, th = int(scaled.GetWidth()), int(scaled.GetHeight())
+        except Exception:
+            pass
+        canvas = _transparent_image(bw, bh)
+        x = max((bw - tw) // 2, 0)
+        y = max((bh - th) // 2, 0)
+        try:
+            canvas.Paste(scaled, x, y)
+        except Exception:
+            # Paste can fail on some builds; still return a scaled image rather than nothing.
+            return scaled
+        return canvas if canvas.IsOk() else scaled
+    except Exception:
+        return None
+
+
 def letterbox_bitmap(
     src: wx.Bitmap,
     box_w: int,
@@ -248,44 +324,33 @@ def letterbox_bitmap(
     crop_to_alpha: bool = False,
 ) -> wx.Bitmap | None:
     """
-    Port of ui.py `_letterbox_bitmap` with transparent background.
+    Letterbox a bitmap. Prefer Image-space compositing; never require ConvertToImage
+    succeeding on wxGTK. Falls back to the original bitmap if compositing fails.
     """
     try:
         if not src or not src.IsOk():
             return None
-        bw = max(int(box_w), 50)
-        bh = max(int(box_h), 50)
-        img = src.ConvertToImage()
-        if not img.IsOk():
-            return None
-        sw, sh = img.GetWidth(), img.GetHeight()
-        if sw <= 0 or sh <= 0:
-            return None
-        scale = min((bw * float(padding)) / sw, (bh * float(padding)) / sh)
-        tw = max(int(sw * scale), 1)
-        th = max(int(sh * scale), 1)
-        img = img.Scale(tw, th, quality=wx.IMAGE_QUALITY_HIGH)
-        if crop_to_alpha:
-            img = _crop_image_to_alpha(img)
-            try:
-                tw, th = int(img.GetWidth()), int(img.GetHeight())
-            except Exception:
-                pass
-        canvas = wx.Bitmap(bw, bh, 32)
+        img = None
         try:
-            canvas.UseAlpha()
+            img = src.ConvertToImage()
         except Exception:
-            pass
-        dc = wx.MemoryDC(canvas)
-        dc.SetBackground(wx.Brush(wx.Colour(0, 0, 0, 0)))
-        dc.Clear()
-        x = (bw - tw) // 2
-        y = (bh - th) // 2
-        dc.DrawBitmap(wx.Bitmap(img), x, y, True)
-        dc.SelectObject(wx.NullBitmap)
-        return canvas
+            img = None
+        if img is not None and img.IsOk():
+            boxed = letterbox_image(img, box_w, box_h, padding, crop_to_alpha=crop_to_alpha)
+            if boxed is not None and boxed.IsOk():
+                try:
+                    out = wx.Bitmap(boxed)
+                    if out.IsOk():
+                        return out
+                except Exception:
+                    pass
+        # Last resort: show the source bitmap unletterboxed rather than failing the preview.
+        return src
     except Exception:
-        return None
+        try:
+            return src if src and src.IsOk() else None
+        except Exception:
+            return None
 
 
 def hires_target_px(win: wx.Window, want_w: int, want_h: int, quality_scale: float = 2.0) -> tuple[int, int]:

@@ -1562,12 +1562,13 @@ class FootprintGeneratorDialog(wx.Dialog):
                 img = wx.Image(str(bmp))
                 if not img.IsOk():
                     raise RuntimeError("PNG load failed")
-                real_bmp = wx.Bitmap(img)
                 w, h = self.prev_bmp.GetClientSize()
-                from library_manager.ui.assets.preview import letterbox_bitmap  # type: ignore
+                from library_manager.ui.assets.preview import letterbox_image  # type: ignore
 
-                boxed = letterbox_bitmap(real_bmp, w, h)
-                self.prev_bmp.SetBitmap(boxed or real_bmp)
+                boxed = letterbox_image(img, w, h)
+                use_img = boxed if (boxed is not None and boxed.IsOk()) else img
+                real_bmp = wx.Bitmap(use_img)
+                self.prev_bmp.SetBitmap(real_bmp)
                 self.prev_bmp.Refresh()
                 self.prev_status.SetLabel("")
             except Exception:
