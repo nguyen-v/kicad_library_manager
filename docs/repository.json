@@ -9,8 +9,8 @@
   },
   "packages": {
     "url": "https://nguyen-v.github.io/kicad_library_manager/packages.json",
-    "sha256": "dd187130a9ba329416f368091aba5f63be56c32a2d12e7d181b126e54f435cb7",
-    "update_timestamp": 1773265052,
-    "update_time_utc": "2026-03-11 21:37:32"
+    "sha256": "ea1c1c6ccbdfd340e718c837d80c12d9e15cb6536b5f420a36c2a8b3ae12c564",
+    "update_timestamp": 1788252779,
+    "update_time_utc": "2026-09-01 08:52:59"
   }
 }
