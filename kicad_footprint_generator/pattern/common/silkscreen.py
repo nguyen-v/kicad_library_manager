@@ -293,6 +293,15 @@ def grid_array(pattern, housing):
     p.moveTo(x, -y + length).lineTo(x, -y).lineTo(x - length, -y)
     p.moveTo(x, y - length).lineTo(x, y).lineTo(x - length, y)
     p.moveTo(-x, y - length).lineTo(-x, y).lineTo(-x + length, y)
+    # Add pin-1 marker (dot) like QFN: top-left corner, inset from edges.
+    try:
+        if housing.get('polarized'):
+            dot_offset = 0.8
+            dot_x = -x + dot_offset
+            dot_y = -y + dot_offset
+            pattern.layer('topSilkscreen').lineWidth(0.1).fill(True).circle(dot_x, dot_y, 0.2).fill(False)
+    except Exception:
+        pass
 
 
 def pak(pattern, housing):

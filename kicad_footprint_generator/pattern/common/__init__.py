@@ -37,12 +37,11 @@ class grid_array:
                 bl = int(round(housing['bodyLength']['nom'] * 100))
                 bw = int(round(housing['bodyWidth']['nom'] * 100))
                 bh = int(round(housing['height']['max'] * 100))
-                # ball diameter (nom)
-                bd_src = housing.get('leadDiameter', {})
-                bd = bd_src.get('nom', bd_src.get('max', bd_src.get('min', 0))) if isinstance(bd_src, dict) else float(bd_src or 0)
-                bd_h = int(round(bd * 100))
                 cn = 'C' if settings['ball']['collapsible'] else 'N'
-                pattern.name = f"BGA{lead_count}{cn}P{pitch}_{cols}X{rows}_{bl:03d}X{bw:03d}X{bh:03d}{bd_h:03d}{settings['densityLevel']}"
+                # Naming scheme:
+                #   BGA + Pin Qty + C/N + Pitch P + Cols X Rows _ Body Length X Body Width X Height
+                # where C/N indicates Collapsing vs Non-collapsing balls.
+                pattern.name = f"BGA{lead_count}{cn}P{pitch}_{cols}X{rows}_{bl:03d}X{bw:03d}X{bh:03d}"
             elif option in ('cga','lga'):
                 pitch = int(round(housing['pitch'] * 100))
                 cols = housing['columnCount']
@@ -66,7 +65,14 @@ class grid_array:
         }
         cu.grid_array(pattern, element, pad)
         ss.grid_array(pattern, housing)
-        asm.body(pattern, housing)
+        # Use quad-style fab outline (pin-1 dot marker) for BGA to match QFN/QFP UX.
+        try:
+            if option == 'bga' and hasattr(asm, "quad"):
+                asm.quad(pattern, housing)
+            else:
+                asm.body(pattern, housing)
+        except Exception:
+            asm.body(pattern, housing)
         cy.grid_array(pattern, housing, pad_params['courtyard'])
 
 
