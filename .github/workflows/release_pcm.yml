@@ -19,6 +19,7 @@ env:
   AUTHOR_WEB: https://github.com/nguyen-v/kicad_library_manager
   LICENSE: GPL-3.0
   KICAD_MIN: "9.0"
+  KICAD_MAX: "10.99"
   STATUS: stable
   RUNTIME: ipc
 
@@ -30,81 +31,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout source (main)
+      - name: Checkout tagged source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
       - name: Set variables
         id: vars
         run: |
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
           TAG="${GITHUB_REF_NAME}"
           VER="${TAG#v}"
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "ver=$VER" >> $GITHUB_OUTPUT
           echo "asset=kicad-library-manager-${VER}.zip" >> $GITHUB_OUTPUT
 
-      - name: Build PCM stage directory
+      - name: Check package and discovery regressions
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Build and validate PCM package
         run: |
           set -euxo pipefail
-          rm -rf dist stage
-          mkdir -p stage/plugins/kicad_library_manager stage/resources dist
-
-          # Copy plugin content into expected PCM layout
-          rsync -a --delete \
-            --exclude ".git/" \
-            --exclude ".github/" \
-            --exclude "dist/" \
-            --exclude "stage/" \
-            --exclude "docs/" \
-            --exclude "pcm/" \
-            ./ stage/plugins/kicad_library_manager/
-
-          # IPC requirement: plugin.json must exist inside a subdir under plugins/
-          test -f stage/plugins/kicad_library_manager/plugin.json
-
-          # Ensure the plugin action icon exists at the path referenced by plugin.json.
-          # (plugin.json references pcm/icon.png, but we exclude pcm/ from the plugin payload.)
-          mkdir -p stage/plugins/kicad_library_manager/pcm
-          cp "pcm/icon.png" stage/plugins/kicad_library_manager/pcm/icon.png
-
-          # Add optional icon inside ZIP as resources/icon.png (if exists)
-          if [ -f "${ICON_PATH}" ]; then
-            cp "${ICON_PATH}" stage/resources/icon.png
-          fi
-
-          # Create ZIP-root metadata.json by injecting version into template
-          python3 - << 'PY'
-          import json, os
-          ver = os.environ["VER"]
-          with open("pcm/metadata.in-zip.json", "r", encoding="utf-8") as f:
-            meta = json.load(f)
-          meta["versions"] = [{
-            "version": ver,
-            "status": os.environ.get("STATUS","stable"),
-            "kicad_version": os.environ.get("KICAD_MIN","9.0"),
-            "runtime": os.environ.get("RUNTIME","ipc"),
-            "platforms": ["windows", "macos", "linux"]
-          }]
-          with open("stage/metadata.json", "w", encoding="utf-8") as f:
-            json.dump(meta, f, indent=2, ensure_ascii=False)
-            f.write("\n")
-          PY
+          python3 -m pip install 'jsonschema>=4.23,<5'
+          mkdir -p "$RUNNER_TEMP/schemas"
+          curl --fail --location --retry 3 https://go.kicad.org/api/schemas/v1 -o "$RUNNER_TEMP/schemas/api.v1.schema.json"
+          curl --fail --location --retry 3 https://go.kicad.org/pcm/schemas/v1 -o "$RUNNER_TEMP/schemas/pcm.v1.schema.json"
+          python3 scripts/build_package.py --tag "$TAG" --status "$STATUS" --schemas "$RUNNER_TEMP/schemas"
         env:
-          VER: ${{ steps.vars.outputs.ver }}
-
-      - name: Create ZIP artifact
-        run: |
-          set -euxo pipefail
-          (cd stage && zip -r "../dist/${ASSET}" .)
-        env:
-          ASSET: ${{ steps.vars.outputs.asset }}
+          TAG: ${{ steps.vars.outputs.tag }}
 
       - name: Create/Update GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
         with:
           files: dist/${{ steps.vars.outputs.asset }}
           generate_release_notes: true
+          prerelease: false
 
       - name: Ensure docs/ exists
         run: |
@@ -139,6 +104,7 @@ jobs:
             --author_web "${AUTHOR_WEB}" \
             --license "${LICENSE}" \
             --kicad_min "${KICAD_MIN}" \
+            --kicad_max "${KICAD_MAX}" \
             --status "${STATUS}" \
             --runtime "${RUNTIME}" \
             --icon_src "${ICON_SRC}" \

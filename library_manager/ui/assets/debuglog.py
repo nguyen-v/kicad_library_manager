@@ -11,8 +11,8 @@ _LOCK = _threading.Lock()
 def _log_path() -> str:
     # Keep it simple and user-accessible.
     # Linux: ~/.cache/kicad_library_manager/footprint_browser_debug.log
-    base = _os.environ.get("XDG_CACHE_HOME") or _os.path.join(_os.path.expanduser("~"), ".cache")
-    d = _os.path.join(base, "kicad_library_manager")
+    from ..cache_dir import plugin_cache_dir
+    d = plugin_cache_dir()
     try:
         _os.makedirs(d, exist_ok=True)
     except Exception:

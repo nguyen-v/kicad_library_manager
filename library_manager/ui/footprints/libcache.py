@@ -13,83 +13,15 @@ from typing import Any
 
 import wx
 
+from ...library_formats import read_library_table
+
 from ...suggest import group_density_variants, list_footprints
 from ..kicad_env import expand_kicad_uri, kicad_config_root, kicad_version_dir, prime_kicad_env_vars, project_root_from_repo
 from ..cache_dir import plugin_cache_dir
 
 
-def _extract_lib_blocks(txt: str) -> list[str]:
-    """
-    Minimal s-expression block extraction for (lib ...) entries.
-    """
-    out: list[str] = []
-    needle = "(lib"
-    i = 0
-    while True:
-        start = txt.find(needle, i)
-        if start < 0:
-            break
-        depth = 0
-        in_str = False
-        esc = False
-        j = start
-        while j < len(txt):
-            ch = txt[j]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-            else:
-                if ch == '"':
-                    in_str = True
-                elif ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0 and j > start:
-                        out.append(txt[start : j + 1])
-                        i = j + 1
-                        break
-            j += 1
-        else:
-            break
-    return out
-
-
 def _parse_lib_table(path: str, repo_path: str) -> dict[str, dict[str, str]]:
-    """
-    Parse fp-lib-table, returning {libName: {type, uri, descr}}.
-    Ported in simplified form from ui.py.
-    """
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            txt = f.read()
-    except Exception:
-        return {}
-
-    libs: dict[str, dict[str, str]] = {}
-    for blk in _extract_lib_blocks(txt):
-        def _field(key: str) -> str:
-            m = re.search(r'\(%s\s+"([^"]+)"\)' % re.escape(key), blk)
-            if m:
-                return (m.group(1) or "").strip()
-            m = re.search(r"\(%s\s+([^\s\)]+)\)" % re.escape(key), blk)
-            if m:
-                return (m.group(1) or "").strip()
-            return ""
-
-        name = _field("name")
-        typ = _field("type")
-        uri = _field("uri")
-        m_descr = re.search(r'\(descr\s+"([^"]*)"\)', blk)
-        descr = (m_descr.group(1).strip() if m_descr else _field("descr"))
-        if not name or not uri:
-            continue
-        libs[name] = {"type": typ, "uri": expand_kicad_uri(uri, repo_path), "descr": descr}
-    return libs
+    return read_library_table(path, lambda uri: expand_kicad_uri(uri, repo_path))
 
 
 def _lib_table_paths(repo_path: str) -> list[str]:
@@ -161,7 +93,7 @@ class FootprintLibraryCache:
                         if typ and "kicad" not in typ:
                             continue
                         if uri and uri.lower().endswith(".pretty") and os.path.isdir(uri):
-                            fp_dirs[name] = uri
+                            fp_dirs.setdefault(name, uri)
 
                 for lib_name, pretty_dir in fp_dirs.items():
                     try:
@@ -391,7 +323,7 @@ class FootprintLibraryCache:
             )
         except Exception:
             return {}
-        if int(getattr(cp, "returncode", 1) or 1) != 0:
+        if int(getattr(cp, "returncode", 1)) != 0:
             return {}
         try:
             resp = _json.loads((cp.stdout or "").strip() or "{}")

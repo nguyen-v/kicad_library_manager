@@ -79,7 +79,8 @@ def _state_path() -> str:
         base = wx.StandardPaths.Get().GetUserConfigDir()
     except Exception:
         base = os.path.expanduser("~")
-    return os.path.join(base, "kicad_library_manager", "footprint_generator_state.json")
+    from library_manager.paths import profile_directory
+    return str(profile_directory(base) / 'footprint_generator_state.json')
 
 
 def _load_state_best_effort() -> dict[str, Any]:

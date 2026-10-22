@@ -18,8 +18,8 @@ PREVIEW_CACHE_VERSION = "4"
 
 
 def cache_dir() -> str:
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    d = os.path.join(base, "kicad_library_manager", "previews")
+    from ..cache_dir import plugin_cache_dir
+    d = os.path.join(plugin_cache_dir(), "previews")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -178,7 +178,24 @@ def svg_to_png(svg_path: str, out_png_path: str, width: int, height: int) -> Non
             return
         raise RuntimeError((cp.stdout or "").strip() or "ImageMagick conversion failed")
 
-    raise RuntimeError("No SVG->PNG converter found (install rsvg-convert or inkscape)")
+    # KiCad bundles wxPython's NanoSVG rasterizer on macOS. Use CPU pixels here
+    # rather than wx.Bitmap/GraphicsContext, since previews run in worker threads.
+    try:
+        from wx.svg import SVGimage
+        svg = SVGimage.CreateFromFile(svg_path)
+        scale = min(w / svg.width, h / svg.height)
+        rgba = svg.Rasterize(width=w, height=h, scale=scale)
+        rgb = bytearray(w * h * 3)
+        rgb[0::3], rgb[1::3], rgb[2::3] = rgba[0::4], rgba[1::4], rgba[2::4]
+        image = wx.Image(w, h)
+        image.SetData(bytes(rgb))
+        image.SetAlpha(bytes(rgba[3::4]))
+        if not image.SaveFile(tmp_png, wx.BITMAP_TYPE_PNG):
+            raise RuntimeError('PNG encoder failed')
+        os.replace(tmp_png, out_png_path)
+        return
+    except Exception as exc:
+        raise RuntimeError('SVG preview needs wx.svg or rsvg-convert: ' + str(exc)) from exc
 
 
 def _file_ok(path: str) -> bool:

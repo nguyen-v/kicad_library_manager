@@ -26,28 +26,12 @@ _UNIT_VARIANT_RE = re.compile(r".*_\d+_\d+$")
 
 
 def list_symbols(repo_path: str) -> list[str]:
-    """
-    Return symbols in KiCad reference form: <Library>:<SymbolName>
-    where <Library> is the .kicad_sym filename without extension.
-    """
-    sym_dir = os.path.join(repo_path, "Symbols")
-    pattern = os.path.join(sym_dir, "*.kicad_sym")
-    out: list[str] = []
-    for sym_path in glob.glob(pattern):
-        lib = os.path.splitext(os.path.basename(sym_path))[0]
-        try:
-            with open(sym_path, "r", encoding="utf-8", errors="replace") as f:
-                txt = f.read()
-        except Exception:
-            continue
-        for m in _SYMBOL_RE.finditer(txt):
-            name = m.group(1)
-            # Filter out unit/derived symbol variants like "C_0_1", "U_1_1", etc.
-            # These are not what users want to select directly.
-            if _UNIT_VARIANT_RE.match(name):
-                continue
-            out.append(f"{lib}:{name}")
-    return sorted(set(out))
+    """Return refs from packed and unpacked company symbol libraries."""
+    from pathlib import Path
+    from .library_formats import symbol_names
+    root = Path(repo_path) / "Symbols"
+    libraries = list(root.glob("*.kicad_sym")) + list(root.glob("*.kicad_symdir"))
+    return sorted({ref for library in libraries for ref in symbol_names(library, library.stem)})
 
 
 def group_density_variants(footprints: list[str]) -> dict[str, list[str]]:
