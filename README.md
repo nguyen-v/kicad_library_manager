@@ -357,9 +357,3 @@ Maintainers can build the same PCM payload used by release CI with
 `python3 scripts/build_package.py`; local builds are marked Testing. A version
 tag matching `library_manager.__version__` creates the stable release and updates
 the existing PCM feed after the change is merged into main.
-
-After all compatibility tests pass, the **Compatibility checks** workflow builds
-and validates a **Testing** PCM ZIP. Download the ZIP from the run's **Artifacts**
-section within 14 days and select it directly with PCM's **Install from File**.
-These CI packages do not update the stable PCM feed; stable publication still
-requires the matching version tag.

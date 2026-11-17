@@ -7,10 +7,8 @@ permissions:
   contents: read
 jobs:
   test:
-    # Python 3.9 builds are available for Ubuntu 24.04, but not 26.04.
     runs-on: ubuntu-24.04
     strategy:
-      fail-fast: false
       matrix:
         python: ['3.9', '3.10', '3.11', '3.12']
     steps:
@@ -19,28 +17,3 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m unittest discover -s tests -v
-
-  package:
-    name: Build testing PCM package
-    needs: test
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Build and validate testing PCM package
-        run: |
-          set -euxo pipefail
-          python3 -m pip install 'jsonschema>=4.23,<5'
-          mkdir -p "$RUNNER_TEMP/schemas"
-          curl --fail --location --retry 3 https://go.kicad.org/api/schemas/v1 -o "$RUNNER_TEMP/schemas/api.v1.schema.json"
-          curl --fail --location --retry 3 https://go.kicad.org/pcm/schemas/v1 -o "$RUNNER_TEMP/schemas/pcm.v1.schema.json"
-          python3 scripts/build_package.py --status testing --schemas "$RUNNER_TEMP/schemas"
-      - name: Upload testing PCM ZIP
-        uses: actions/upload-artifact@v7
-        with:
-          path: dist/kicad-library-manager-*.zip
-          archive: false
-          if-no-files-found: error
-          retention-days: 14
