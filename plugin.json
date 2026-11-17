@@ -5,7 +5,7 @@
   "description": "GUI for managing a KiCad parts library repository",
   "runtime": {
     "type": "python",
-    "min_version": "3.10"
+    "min_version": "3.9"
   },
   "actions": [
     {

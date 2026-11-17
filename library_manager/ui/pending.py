@@ -31,9 +31,8 @@ class PendingStore:
         We keep this alongside config.json under XDG config dir:
           ~/.config/kicad_library_manager/pending.json
         """
-        xdg = os.environ.get("XDG_CONFIG_HOME")
-        base = xdg if xdg else os.path.join(os.path.expanduser("~"), ".config")
-        return os.path.join(base, "kicad_library_manager", "pending.json")
+        from ..paths import config_directory
+        return str(config_directory() / 'pending.json')
 
     def _ensure_loaded(self) -> None:
         if self._loaded:

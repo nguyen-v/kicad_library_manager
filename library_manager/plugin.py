@@ -42,7 +42,8 @@ def _cache_root_dir() -> str:
 
 
 def _plugin_cache_dir() -> str:
-    d = os.path.join(_cache_root_dir(), "kicad_library_manager")
+    from library_manager.paths import cache_directory
+    d = str(cache_directory())
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:
@@ -254,6 +255,7 @@ def _show_error_dialog(title: str, message: str) -> None:
 
 
 def main() -> int:
+    _ensure_sys_path_for_package()
     _boot_log("=== plugin start ===")
     _boot_log(f"pid={os.getpid()}")
     try:
@@ -315,19 +317,19 @@ def main() -> int:
     # Standalone process: we must create the wx App.
     app = wx.App(False)
 
-    # Ensure only one instance runs at a time (per user).
-    if not _ensure_single_instance_or_notify(app):
-        _boot_log("another instance detected; exiting")
-        return 0
-
-    # Only after passing the single-instance check, write PID file.
-    _write_pid_file()
-
     # Resolve project path from the running pcbnew instance via IPC.
     repo_path: str | None = None
     project_dir: str = ""
     try:
         kicad = kipy.KiCad(timeout_ms=4000)
+        from library_manager.ui.kicad_env import configure_runtime
+        version = kicad.get_version()
+        configure_runtime(version.major)
+        # Pick the editor's profile before reading settings or taking its lock.
+        if not _ensure_single_instance_or_notify(app):
+            _boot_log("another instance detected; exiting")
+            return 0
+        _write_pid_file()
         board = kicad.get_board()
         if board is None:
             wx.MessageBox(
@@ -346,6 +348,7 @@ def main() -> int:
                 project_dir = sp
         except Exception:
             project_dir = ""
+        configure_runtime(version.major, project_dir)
         repo_path = find_repo_root_from_project(str(start_path))
         if not repo_path:
             # Try settings path first.

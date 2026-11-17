@@ -6,13 +6,8 @@ from dataclasses import dataclass
 
 
 def _default_config_path() -> str:
-    # Prefer XDG config dir on Linux; otherwise fall back to home.
-    xdg = os.environ.get("XDG_CONFIG_HOME")
-    if xdg:
-        base = xdg
-    else:
-        base = os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "kicad_library_manager", "config.json")
+    from .paths import config_directory
+    return str(config_directory() / 'config.json')
 
 
 def _repo_settings_relpath() -> str:

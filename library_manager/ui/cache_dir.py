@@ -36,7 +36,8 @@ def plugin_cache_dir() -> str:
     """
     Cache dir for this plugin (previews, remote-sha state, logs).
     """
-    d = os.path.join(cache_root_dir(), "kicad_library_manager")
+    from ..paths import cache_directory
+    d = str(cache_directory())
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:

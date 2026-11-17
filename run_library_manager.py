@@ -59,7 +59,8 @@ def main() -> int:
 
     _boot_log("=== bundle entrypoint start ===")
     _boot_log(f"pid={_os.getpid()}")
-    _write_pid_file()
+    # The inner entrypoint writes the PID after choosing the editor's profile
+    # and acquiring its single-instance lock.
     _boot_log(f"argv={_sys.argv!r}")
     _boot_log(f"cwd={_os.getcwd()!r}")
     _boot_log(f"exe={_sys.executable!r}")

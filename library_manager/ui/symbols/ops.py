@@ -15,24 +15,9 @@ def extract_kicad_symbol_meta(sym_lib_path: str, symbol_name: str) -> tuple[str,
     """
     Best-effort extraction of (Description, Datasheet) properties for a symbol inside a .kicad_sym file.
     """
-    try:
-        with open(sym_lib_path, "r", encoding="utf-8", errors="ignore") as f:
-            txt = f.read()
-    except Exception:
-        return ("", "")
+    from ...library_formats import symbol_metadata
+    return symbol_metadata(sym_lib_path, "lib").get(f"lib:{symbol_name}", ("", ""))
 
-    import re as _re
-
-    m = _re.search(r'\(symbol\s+"%s"\s' % _re.escape(symbol_name), txt)
-    if not m:
-        return ("", "")
-    window = txt[m.start() : m.start() + 80000]
-
-    def _prop(key: str) -> str:
-        mm = _re.search(r'\(property\s+"%s"\s+"([^"]*)"' % _re.escape(key), window)
-        return (mm.group(1).strip() if mm else "")
-
-    return (_prop("Description"), _prop("Datasheet"))
 
 
 def remove_kicad_symbol_from_lib(sym_lib_path: str, symbol_name: str) -> None:

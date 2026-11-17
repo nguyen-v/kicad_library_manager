@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import glob as _glob
 import os
+import json
+import re
+from pathlib import Path
 import shutil as _shutil
 import subprocess
 import sys
@@ -15,164 +18,98 @@ _KICAD_ENV_VARS: dict[str, str] | None = None
 _KICAD_CLI_PATH: str | None = None
 
 
+_KICAD_MAJOR: int | None = None
+_PROJECT_DIR: str | None = None
+
+
+def runtime_major() -> int:
+    return _KICAD_MAJOR or 9
+
+
+def configure_runtime(major: int, project_dir: str = "") -> None:
+    """Bind filesystem/CLI discovery to the editor that launched this process."""
+    if major not in (9, 10):
+        raise RuntimeError(f"KiCad {major} is not supported; use KiCad 9 or 10.")
+    global _KICAD_MAJOR, _PROJECT_DIR, _KICAD_CLI_PATH, _KICAD_ENV_VARS
+    _KICAD_MAJOR = major
+    _PROJECT_DIR = project_dir or None
+    _KICAD_CLI_PATH = None
+    _KICAD_ENV_VARS = None
+
+
+def _cli_major(path: str) -> int | None:
+    try:
+        cp = subprocess.run([path, "version"], capture_output=True, text=True,
+                            timeout=8, **SUBPROCESS_NO_WINDOW)
+        match = re.search(r"(?<![0-9])(\d+)\.\d+", cp.stdout)
+        return int(match[1]) if cp.returncode == 0 and match else None
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def resolve_kicad_cli() -> str:
-    """
-    Return an executable path for `kicad-cli`.
-
-    On macOS, KiCad is commonly installed as an app bundle and `kicad-cli` is not on PATH
-    inside KiCad's IPC plugin environment. This resolver searches common locations.
-
-    Override:
-      - set env var `KICAD_CLI` to the full path of the kicad-cli executable.
-    """
+    """Select the launching editor's major; reject a mismatched explicit override."""
     global _KICAD_CLI_PATH
     if _KICAD_CLI_PATH:
-        return str(_KICAD_CLI_PATH)
-
-    # Explicit override.
-    try:
-        override = str(os.environ.get("KICAD_CLI") or "").strip()
-    except Exception:
-        override = ""
-    if override:
-        if os.path.isfile(override) and os.access(override, os.X_OK):
-            _KICAD_CLI_PATH = override
-            return override
-
-    # PATH lookup.
-    exe_name = "kicad-cli.exe" if sys.platform == "win32" else "kicad-cli"
-    p = _shutil.which(exe_name) or _shutil.which("kicad-cli")
-    if p:
-        _KICAD_CLI_PATH = p
-        return p
-
-    # Windows: KiCad IPC plugin environment often has a minimal PATH.
-    # Probe likely install locations and KiCad-derived paths from sys.path.
-    if sys.platform == "win32":
-        cands: list[str] = []
-        try:
-            # If sys.path contains ".../KiCad/<ver>/bin/python311.zip", infer bin dir.
-            for sp in list(sys.path):
-                s = str(sp or "").strip()
-                if not s:
-                    continue
-                low = s.lower().replace("/", "\\")
-                if low.endswith("\\python311.zip") or low.endswith("\\python312.zip") or low.endswith("\\dlls"):
-                    b = os.path.dirname(s)
-                    cands.append(os.path.join(b, "kicad-cli.exe"))
-                    # Handle DLLs case by checking sibling bin.
-                    cands.append(os.path.join(os.path.dirname(b), "bin", "kicad-cli.exe"))
-        except Exception:
-            pass
-        try:
-            pf = str(os.environ.get("ProgramFiles") or r"C:\Program Files").strip() or r"C:\Program Files"
-            pfx86 = str(os.environ.get("ProgramFiles(x86)") or r"C:\Program Files (x86)").strip() or r"C:\Program Files (x86)"
-            for base in (pf, pfx86):
-                cands.extend(sorted(_glob.glob(os.path.join(base, "KiCad", "*", "bin", "kicad-cli.exe"))))
-                cands.extend(sorted(_glob.glob(os.path.join(base, "KiCad*", "bin", "kicad-cli.exe"))))
-                cands.append(os.path.join(base, "KiCad", "bin", "kicad-cli.exe"))
-        except Exception:
-            pass
-        # De-dup while preserving order.
-        seen: set[str] = set()
-        for cand in cands:
-            try:
-                ap = os.path.abspath(str(cand or "").strip())
-            except Exception:
-                ap = str(cand or "").strip()
-            if not ap or ap in seen:
-                continue
-            seen.add(ap)
-            try:
-                if os.path.isfile(ap):
-                    _KICAD_CLI_PATH = ap
-                    return ap
-            except Exception:
-                continue
-
-    # macOS app bundle locations (KiCad 7/8/9).
-    if sys.platform == "darwin":
-        cands: list[str] = []
-        # System-wide app install(s)
-        cands.extend(sorted(_glob.glob("/Applications/KiCad*/KiCad.app/Contents/MacOS/kicad-cli")))
-        cands.extend(sorted(_glob.glob("/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli")))
-        # User-local Applications
-        home = os.path.expanduser("~")
-        cands.extend(sorted(_glob.glob(os.path.join(home, "Applications", "KiCad*.app", "Contents", "MacOS", "kicad-cli"))))
-        cands.extend(sorted(_glob.glob(os.path.join(home, "Applications", "KiCad.app", "Contents", "MacOS", "kicad-cli"))))
-        for cand in cands:
-            if os.path.isfile(cand) and os.access(cand, os.X_OK):
-                _KICAD_CLI_PATH = cand
-                return cand
-
-    raise RuntimeError(
-        "kicad-cli was not found.\n\n"
-        "Fix:\n"
-        "- Ensure KiCad is installed, and that `kicad-cli` is available, or\n"
-        "- Set environment variable KICAD_CLI to the full path of the kicad-cli executable.\n\n"
-        "On Windows, a common path is:\n"
-        "  C:\\Program Files\\KiCad\\9.0\\bin\\kicad-cli.exe\n\n"
-        "On macOS, a common path is:\n"
-        "  /Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
-    )
+        return _KICAD_CLI_PATH
+    override = os.environ.get("KICAD_CLI", "").strip()
+    candidates = [override] if override else []
+    if not override:
+        name = "kicad-cli.exe" if sys.platform == "win32" else "kicad-cli"
+        appdir = os.environ.get("APPDIR", "")
+        if appdir:
+            candidates.append(str(Path(appdir) / "bin" / name))
+        candidates.append(str(Path(sys.executable).parent / name))
+        candidates.append(_shutil.which(name) or "")
+        if sys.platform == "win32":
+            for base in (os.environ.get("ProgramFiles", r"C:\Program Files"),
+                         os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")):
+                candidates.extend(_glob.glob(os.path.join(base, "KiCad", "*", "bin", name)))
+        elif sys.platform == "darwin":
+            for base in ("/Applications", os.path.expanduser("~/Applications")):
+                candidates.extend(_glob.glob(base + "/KiCad*/KiCad.app/Contents/MacOS/kicad-cli"))
+                candidates.extend(_glob.glob(base + "/KiCad*.app/Contents/MacOS/kicad-cli"))
+    for path in dict.fromkeys(candidates):
+        if not path or not os.path.isfile(path) or not os.access(path, os.X_OK):
+            continue
+        major = _cli_major(path)
+        if major not in (9, 10) or (_KICAD_MAJOR and major != _KICAD_MAJOR):
+            continue
+        _KICAD_CLI_PATH = path
+        return path
+    expected = f" {_KICAD_MAJOR}" if _KICAD_MAJOR else " 9 or 10"
+    raise RuntimeError(f"A matching KiCad{expected} kicad-cli was not found. "
+                       "Set KICAD_CLI to that installation's executable.")
 
 
 def kicad_cli_env_vars() -> dict[str, str]:
-    """
-    Best-effort read KiCad environment variables via kicad-cli.
-    Matches ui.py behavior (tries `kicad-cli env` and `kicad-cli env vars`).
-    """
-    exe = None
-    try:
-        exe = resolve_kicad_cli()
-    except Exception:
-        exe = None
-    if not exe:
-        return {}
-    cmds = [[exe, "env"], [exe, "env", "vars"]]
-    for cmd in cmds:
-        try:
-            cp = subprocess.run(
-                cmd,
-                check=False,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                encoding="utf-8",
-                errors="replace",
-                **SUBPROCESS_NO_WINDOW,
-            )
-        except Exception:
-            continue
-        if cp.returncode != 0:
-            continue
-        txt = cp.stdout or ""
-        out: dict[str, str] = {}
-        for line in txt.splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            k = ""
-            v = ""
-            if "=" in line:
-                k, v = line.split("=", 1)
-            elif ":" in line:
-                k, v = line.split(":", 1)
-            else:
-                parts = line.split(None, 1)
-                if len(parts) == 2:
-                    k, v = parts[0], parts[1]
-                else:
-                    continue
-            k = (k or "").strip().strip('"')
-            v = (v or "").strip().strip('"')
-            if v.startswith("="):
-                v = v.lstrip("=").strip()
-            if not k:
-                continue
-            out[k] = v
-        if out:
-            return out
-    return {}
+    """Read Configure Paths settings and installation defaults (CLI has no env command)."""
+    major = _KICAD_MAJOR or _cli_major(resolve_kicad_cli())
+    result: dict[str, str] = {}
+    config = kicad_config_root()
+    if config:
+        directory = kicad_version_dir(config, f"{major}.0")
+        if directory:
+            try:
+                data = json.loads((Path(directory) / "kicad_common.json").read_text())
+                variables = (data.get("environment") or {}).get("vars") or {}
+                result.update({str(k): str(v) for k, v in variables.items()})
+            except (OSError, ValueError):
+                pass
+    # KICAD_STOCK_DATA_HOME is supplied by the official AppImage. Native installs
+    # put the same tree at <prefix>/share/kicad (or SharedSupport on macOS).
+    roots = [Path(os.environ["KICAD_STOCK_DATA_HOME"])] if os.environ.get("KICAD_STOCK_DATA_HOME") else []
+    exe = Path(resolve_kicad_cli()).resolve()
+    roots.extend([exe.parent.parent / "share/kicad", exe.parent.parent / "SharedSupport"])
+    for root in roots:
+        if (root / 'symbols').is_dir():
+            for suffix, subdir in (("SYMBOL_DIR", "symbols"), ("FOOTPRINT_DIR", "footprints"),
+                                   ("3DMODEL_DIR", "3dmodels"), ("TEMPLATE_DIR", "template")):
+                result.setdefault(f"KICAD{major}_{suffix}", str(root / subdir))
+            break
+    # Explicit environment overrides Configure Paths, as it does in KiCad.
+    result.update(os.environ)
+    return result
 
 
 def prime_kicad_env_vars() -> dict[str, str]:
@@ -197,7 +134,7 @@ def kicad_config_root() -> str | None:
     Ported from ui.py.
     """
     try:
-        for key in ("KICAD_CONFIG_HOME", "KICAD9_CONFIG_HOME"):
+        for key in ("KICAD_CONFIG_HOME", f"KICAD{_KICAD_MAJOR or 9}_CONFIG_HOME"):
             v = (os.environ.get(key) or "").strip()
             if v and os.path.isdir(v):
                 return v
@@ -227,33 +164,26 @@ def kicad_config_root() -> str | None:
     return None
 
 
-def kicad_version_dir(config_root: str, preferred: str = "9.0") -> str | None:
-    """
-    Pick the KiCad version subdir (prefer 9.0), ported from ui.py.
-    """
+def kicad_version_dir(config_root: str, preferred: str | None = None) -> str | None:
+    """Use the launching major; standalone fallback sorts numeric version tuples."""
+    preferred = preferred or (f"{_KICAD_MAJOR}.0" if _KICAD_MAJOR else None)
+    root = Path(config_root)
+    if preferred:
+        selected = root / preferred
+        return str(selected) if selected.is_dir() else None
     try:
-        pref = os.path.join(config_root, preferred)
-        if os.path.isdir(pref):
-            return pref
-        vers: list[str] = []
-        for n in os.listdir(config_root):
-            p = os.path.join(config_root, n)
-            if not os.path.isdir(p):
-                continue
-            if "." in n and all(part.isdigit() for part in n.split(".") if part):
-                vers.append(n)
-        if vers:
-            vers.sort()
-            return os.path.join(config_root, vers[-1])
-    except Exception:
+        versions = [p for p in root.iterdir() if p.is_dir() and re.fullmatch(r"\d+\.\d+", p.name)]
+        return str(max(versions, key=lambda p: tuple(map(int, p.name.split('.'))))) if versions else None
+    except OSError:
         return None
-    return None
 
 
 def project_root_from_repo(repo_path: str) -> str:
     """
     Compute KIPRJMOD-ish path based on the submodule layout (ui.py behavior).
     """
+    if _PROJECT_DIR:
+        return _PROJECT_DIR
     rp = os.path.abspath(repo_path or "")
     base = os.path.basename(rp)
     # Common layout: <project>/Libraries/<repo_root>
@@ -283,12 +213,17 @@ def expand_kicad_uri(uri: str, repo_path: str) -> str:
         vars_map.update(prime_kicad_env_vars())
     except Exception:
         pass
-    vars_map.setdefault("KIPRJMOD", project_root_from_repo(repo_path))
+    vars_map["KIPRJMOD"] = project_root_from_repo(repo_path)
     try:
         import re as _re
 
         def _sub(m):
             k = m.group(1)
+            # KiCad remaps older built-in path variables when they have no
+            # explicit value (for example a 9 footprint URI in a 10 project).
+            old = _re.fullmatch(r'KICAD(\d+)_(SYMBOL_DIR|FOOTPRINT_DIR|3DMODEL_DIR|TEMPLATE_DIR)', k)
+            if k not in vars_map and old and _KICAD_MAJOR and int(old[1]) < _KICAD_MAJOR:
+                return vars_map.get(f'KICAD{_KICAD_MAJOR}_{old[2]}', m.group(0))
             return vars_map.get(k, m.group(0))
 
         out = _re.sub(r"\$\{([^}]+)\}", _sub, out)

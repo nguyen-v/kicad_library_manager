@@ -7,80 +7,9 @@ import sys
 from typing import Any
 
 
-def _extract_blocks(txt: str, needle: str) -> list[str]:
-    """
-    Minimal s-expression block extraction for entries like (symbol "...").
-    This is intentionally dependency-free (no wx) and suitable for subprocess use.
-    """
-    out: list[str] = []
-    i = 0
-    while True:
-        start = txt.find(needle, i)
-        if start < 0:
-            break
-        depth = 0
-        in_str = False
-        esc = False
-        j = start
-        while j < len(txt):
-            ch = txt[j]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-            else:
-                if ch == '"':
-                    in_str = True
-                elif ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0 and j > start:
-                        out.append(txt[start : j + 1])
-                        i = j + 1
-                        break
-            j += 1
-        else:
-            break
-    return out
-
-
-_SYMBOL_RE = re.compile(r'\(symbol\s+"([^"]+)"')
-_UNIT_VARIANT_RE = re.compile(r".*_\d+_\d+$")
-
-
 def _scan_kicad_sym_file_meta(sym_lib_path: str, lib_name: str) -> dict[str, tuple[str, str]]:
-    """
-    Return meta map for a .kicad_sym file: "Lib:Sym" -> (Description, Datasheet).
-    """
-    try:
-        with open(sym_lib_path, "r", encoding="utf-8", errors="ignore") as f:
-            txt = f.read()
-    except Exception:
-        return {}
-
-    meta: dict[str, tuple[str, str]] = {}
-    for blk in _extract_blocks(txt, '(symbol "'):
-        m = _SYMBOL_RE.search(blk)
-        if not m:
-            continue
-        name = (m.group(1) or "").strip()
-        if not name or _UNIT_VARIANT_RE.match(name):
-            continue
-        desc = ""
-        ds = ""
-        try:
-            mm = re.search(r'\(property\s+"Description"\s+"([^"]*)"', blk)
-            desc = (mm.group(1).strip() if mm else "")
-            mm2 = re.search(r'\(property\s+"Datasheet"\s+"([^"]*)"', blk)
-            ds = (mm2.group(1).strip() if mm2 else "")
-        except Exception:
-            pass
-        meta[f"{lib_name}:{name}"] = (desc, ds)
-    return meta
+    from ...library_formats import symbol_metadata
+    return symbol_metadata(sym_lib_path, lib_name)
 
 
 def main(argv: list[str]) -> int:

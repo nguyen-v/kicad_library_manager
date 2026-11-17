@@ -439,17 +439,18 @@ def git_fetch_head_mtime(repo_path: str) -> float | None:
 def git_ls_tree_paths(repo_path: str, ref: str, prefixes: list[str]) -> set[str]:
     """
     Return repo-relative file paths present in `<ref>` under the given prefixes.
+
+    Use NUL-delimited output to preserve non-ASCII names and filename whitespace.
     """
     prefs = [str(p or "").strip().strip("/").strip("\\") for p in (prefixes or []) if str(p or "").strip()]
     if not prefs:
         return set()
     try:
-        out = run_git(["git", "ls-tree", "-r", "--name-only", ref, "--"] + prefs, cwd=repo_path)
+        out = run_git(["git", "ls-tree", "-r", "--name-only", "-z", ref, "--"] + prefs, cwd=repo_path)
     except Exception:
         return set()
     res: set[str] = set()
-    for line in (out or "").splitlines():
-        p = (line or "").strip()
+    for p in (out or "").split("\0"):
         if p:
             res.add(p.replace(os.sep, "/"))
     return res

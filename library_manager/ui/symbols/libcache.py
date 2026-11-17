@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json as _json
 import os
+from pathlib import Path
 import re
 import gzip as _gzip
 import hashlib as _hashlib
@@ -13,82 +14,15 @@ from typing import Any
 
 import wx
 
+from ...library_formats import read_library_table, symbol_names, symbol_metadata, symbol_files
+
 from ...suggest import list_symbols
 from ..kicad_env import expand_kicad_uri, kicad_config_root, kicad_version_dir, prime_kicad_env_vars, project_root_from_repo
 from ..cache_dir import plugin_cache_dir
 
 
-def _extract_blocks(txt: str, needle: str) -> list[str]:
-    """
-    Minimal s-expression block extraction for entries like (lib ...) or (symbol ...).
-    """
-    out: list[str] = []
-    i = 0
-    while True:
-        start = txt.find(needle, i)
-        if start < 0:
-            break
-        depth = 0
-        in_str = False
-        esc = False
-        j = start
-        while j < len(txt):
-            ch = txt[j]
-            if in_str:
-                if esc:
-                    esc = False
-                elif ch == "\\":
-                    esc = True
-                elif ch == '"':
-                    in_str = False
-            else:
-                if ch == '"':
-                    in_str = True
-                elif ch == "(":
-                    depth += 1
-                elif ch == ")":
-                    depth -= 1
-                    if depth == 0 and j > start:
-                        out.append(txt[start : j + 1])
-                        i = j + 1
-                        break
-            j += 1
-        else:
-            break
-    return out
-
-
 def _parse_lib_table(path: str, repo_path: str) -> dict[str, dict[str, str]]:
-    """
-    Parse sym-lib-table, returning {libName: {type, uri, descr}}.
-    """
-    try:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            txt = f.read()
-    except Exception:
-        return {}
-
-    libs: dict[str, dict[str, str]] = {}
-    for blk in _extract_blocks(txt, "(lib"):
-
-        def _field(key: str) -> str:
-            m = re.search(r'\(%s\s+"([^"]+)"\)' % re.escape(key), blk)
-            if m:
-                return (m.group(1) or "").strip()
-            m = re.search(r"\(%s\s+([^\s\)]+)\)" % re.escape(key), blk)
-            if m:
-                return (m.group(1) or "").strip()
-            return ""
-
-        name = _field("name")
-        typ = _field("type")
-        uri = _field("uri")
-        m_descr = re.search(r'\(descr\s+"([^"]*)"\)', blk)
-        descr = (m_descr.group(1).strip() if m_descr else _field("descr"))
-        if not name or not uri:
-            continue
-        libs[name] = {"type": typ, "uri": expand_kicad_uri(uri, repo_path), "descr": descr}
-    return libs
+    return read_library_table(path, lambda uri: expand_kicad_uri(uri, repo_path))
 
 
 def _lib_table_paths(repo_path: str) -> list[str]:
@@ -114,10 +48,6 @@ def _lib_table_paths(repo_path: str) -> list[str]:
     return out
 
 
-_SYMBOL_RE = re.compile(r'\(symbol\s+"([^"]+)"')
-_UNIT_VARIANT_RE = re.compile(r".*_\d+_\d+$")
-
-
 def _repo_symbols_signature(repo_path: str) -> str:
     """
     Fast signature for repo-local symbol libraries.
@@ -129,83 +59,25 @@ def _repo_symbols_signature(repo_path: str) -> str:
     sym_dir = os.path.join(rp, "Symbols")
     rows: list[str] = []
     try:
-        if not os.path.isdir(sym_dir):
-            return "no_symbols_dir"
-        with os.scandir(sym_dir) as it:
-            for ent in it:
-                try:
-                    if not ent.is_file():
-                        continue
-                    nm = str(ent.name or "")
-                    if not nm.endswith(".kicad_sym"):
-                        continue
-                    st = ent.stat()
-                    rows.append(f"{nm}\t{int(st.st_mtime)}\t{int(st.st_size)}")
-                except Exception:
-                    continue
-    except Exception:
-        return "scan_error"
+        for library in sorted(Path(sym_dir).iterdir()):
+            if library.suffix not in ('.kicad_sym', '.kicad_symdir'):
+                continue
+            for member in symbol_files(library):
+                st = member.stat()
+                rows.append(f"{member}\t{st.st_mtime_ns}\t{st.st_size}")
+    except OSError:
+        return "no_symbols_dir"
     rows.sort()
     raw = ("\n".join(rows)).encode("utf-8", errors="ignore")
     return _hashlib.sha256(raw).hexdigest()
 
 
 def _scan_kicad_sym_file_names(sym_lib_path: str, lib_name: str) -> list[str]:
-    """
-    Return symbol refs for a .kicad_sym file.
-
-    This is intentionally fast (name-only), similar to how footprints index by
-    listing `.kicad_mod` filenames. Metadata (Description/Datasheet) is loaded
-    lazily per-library when needed.
-    """
-    try:
-        with open(sym_lib_path, "r", encoding="utf-8", errors="ignore") as f:
-            txt = f.read()
-    except Exception:
-        return []
-
-    refs: list[str] = []
-    for m in _SYMBOL_RE.finditer(txt):
-        try:
-            name = (m.group(1) or "").strip()
-        except Exception:
-            name = ""
-        if not name or _UNIT_VARIANT_RE.match(name):
-            continue
-        refs.append(f"{lib_name}:{name}")
-    return sorted(set(refs))
+    return symbol_names(sym_lib_path, lib_name)
 
 
 def _scan_kicad_sym_file_meta(sym_lib_path: str, lib_name: str) -> dict[str, tuple[str, str]]:
-    """
-    Return meta map for a .kicad_sym file: "Lib:Sym" -> (Description, Datasheet).
-    Loaded lazily per-library.
-    """
-    try:
-        with open(sym_lib_path, "r", encoding="utf-8", errors="ignore") as f:
-            txt = f.read()
-    except Exception:
-        return {}
-
-    meta: dict[str, tuple[str, str]] = {}
-    for blk in _extract_blocks(txt, '(symbol "'):
-        m = _SYMBOL_RE.search(blk)
-        if not m:
-            continue
-        name = (m.group(1) or "").strip()
-        if not name or _UNIT_VARIANT_RE.match(name):
-            continue
-        desc = ""
-        ds = ""
-        try:
-            mm = re.search(r'\(property\s+"Description"\s+"([^"]*)"', blk)
-            desc = (mm.group(1).strip() if mm else "")
-            mm2 = re.search(r'\(property\s+"Datasheet"\s+"([^"]*)"', blk)
-            ds = (mm2.group(1).strip() if mm2 else "")
-        except Exception:
-            pass
-        meta[f"{lib_name}:{name}"] = (desc, ds)
-    return meta
+    return symbol_metadata(sym_lib_path, lib_name)
 
 
 class SymbolLibraryCache:
@@ -264,7 +136,7 @@ class SymbolLibraryCache:
                 sym_dir = os.path.join(repo_path, "Symbols")
                 try:
                     for fn in os.listdir(sym_dir):
-                        if not fn.endswith(".kicad_sym"):
+                        if not fn.endswith((".kicad_sym", ".kicad_symdir")):
                             continue
                         lib = os.path.splitext(fn)[0]
                         p = os.path.join(sym_dir, fn)
@@ -278,7 +150,7 @@ class SymbolLibraryCache:
                         uri = (meta.get("uri") or "").strip()
                         if not uri:
                             continue
-                        if uri.lower().endswith(".kicad_sym") and os.path.exists(uri):
+                        if meta.get("type", "").casefold() == "kicad" and (os.path.isfile(uri) or os.path.isdir(uri)):
                             sym_files.setdefault(name, uri)
 
                 # Scan each lib file once for symbol NAMES only (fast path).
@@ -398,7 +270,7 @@ class SymbolLibraryCache:
                 env=env,
                 timeout=max(1.0, float(wait_s or 10.0)),
             )
-            if int(getattr(cp, "returncode", 1) or 1) == 0:
+            if int(getattr(cp, "returncode", 1)) == 0:
                 try:
                     resp = _json.loads((cp.stdout or "").strip() or "{}")
                 except Exception:
@@ -521,7 +393,7 @@ class SymbolLibraryCache:
             )
         except Exception:
             return
-        if int(getattr(cp, "returncode", 1) or 1) != 0:
+        if int(getattr(cp, "returncode", 1)) != 0:
             return
         try:
             resp = _json.loads((cp.stdout or "").strip() or "{}")
@@ -604,8 +476,9 @@ class SymbolLibraryCache:
             if not (nick and ap):
                 continue
             try:
-                st2 = os.stat(ap)
-                rows.append(f"{nick}\t{ap}\t{int(st2.st_mtime)}\t{int(st2.st_size)}")
+                for member in symbol_files(ap):
+                    st2 = member.stat()
+                    rows.append(f"{nick}\t{member}\t{st2.st_mtime_ns}\t{st2.st_size}")
             except Exception:
                 rows.append(f"{nick}\t{ap}\t?\t?")
         rows.sort()
@@ -677,9 +550,10 @@ def resolve_symbol_lib_path(repo_path: str, lib: str) -> str | None:
     lib = (lib or "").strip()
     if not lib:
         return None
-    p = os.path.join(repo_path, "Symbols", f"{lib}.kicad_sym")
-    if os.path.exists(p):
-        return p
+    for suffix in (".kicad_sym", ".kicad_symdir"):
+        p = os.path.join(repo_path, "Symbols", f"{lib}{suffix}")
+        if os.path.exists(p):
+            return p
     st = SYMBOL_LIBCACHE.snapshot(repo_path)
     return (st.get("sym_lib_files") or {}).get(lib)
 

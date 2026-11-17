@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--author_web", required=True)
     ap.add_argument("--license", default="GPL-3.0")
     ap.add_argument("--kicad_min", default="9.0")
+    ap.add_argument("--kicad_max", default="10.99")
     ap.add_argument("--status", default="stable")
     ap.add_argument("--runtime", default="ipc")
 
@@ -67,6 +68,7 @@ def main():
         "version": args.version,
         "status": args.status,
         "kicad_version": args.kicad_min,
+        "kicad_version_max": args.kicad_max,
         "runtime": args.runtime,
         "platforms": ["windows", "macos", "linux"],
         "download_url": dl_url,

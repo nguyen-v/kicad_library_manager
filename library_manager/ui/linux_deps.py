@@ -64,7 +64,12 @@ def missing_linux_host_deps() -> list[str]:
     if not sys.platform.startswith("linux"):
         return []
     missing: list[str] = []
-    if not _which("rsvg-convert"):
+    try:
+        from wx.svg import SVGimage
+        builtin_svg = SVGimage is not None
+    except ImportError:
+        builtin_svg = False
+    if not builtin_svg and not any(_which(tool) for tool in ("rsvg-convert", "inkscape", "magick", "convert")):
         missing.append("librsvg2-bin (symbol/footprint previews)")
     if not sqlite_odbc_registered():
         missing.append("SQLite3 ODBC Driver (KiCad database libraries / DBL)")
@@ -72,8 +77,8 @@ def missing_linux_host_deps() -> list[str]:
 
 
 def _skip_marker_path() -> str:
-    base = os.environ.get("XDG_CACHE_HOME") or os.path.join(os.path.expanduser("~"), ".cache")
-    d = os.path.join(base, "kicad_library_manager")
+    from .cache_dir import plugin_cache_dir
+    d = plugin_cache_dir()
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:

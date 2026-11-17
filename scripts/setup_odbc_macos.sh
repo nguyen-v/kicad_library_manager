@@ -31,7 +31,7 @@ as_root() {
 need_cmd brew
 
 echo "Installing dependencies via Homebrew (sqliteodbc includes unixODBC)..."
-brew install sqliteodbc || true
+brew install sqliteodbc
 
 need_cmd odbcinst
 
@@ -88,8 +88,15 @@ fi
 echo
 echo "Target odbcinst.ini: $ODBCINST_INI"
 
-as_root mkdir -p "$(dirname "$ODBCINST_INI")"
-as_root touch "$ODBCINST_INI"
+if [[ -w "$ODBCINST_INI" ]] || [[ ! -e "$ODBCINST_INI" && -w "$(dirname "$ODBCINST_INI")" ]]; then
+  mkdir -p "$(dirname "$ODBCINST_INI")"
+  touch "$ODBCINST_INI"
+  port_needs_root=false
+else
+  as_root mkdir -p "$(dirname "$ODBCINST_INI")"
+  as_root touch "$ODBCINST_INI"
+  port_needs_root=true
+fi
 
 tmpfile="$(mktemp)"
 trap 'rm -f "$tmpfile"' EXIT
@@ -111,7 +118,11 @@ Setup=$setup_path
 Threading=2
 EOF
 
-as_root cp "$tmpfile" "$ODBCINST_INI"
+if [[ "$port_needs_root" == true ]]; then
+  as_root cp "$tmpfile" "$ODBCINST_INI"
+else
+  cp "$tmpfile" "$ODBCINST_INI"
+fi
 
 echo
 echo "Registered drivers now:"

@@ -15,6 +15,7 @@ import wx
 import wx.dataview as dv
 import wx.grid as gridlib
 
+from .. import __version__
 from ..config import Config
 from ..repo import Category, list_categories, is_repo_root
 from .async_ui import UiDebouncer, UiRepeater, WindowTaskRunner, is_window_alive
@@ -56,6 +57,8 @@ from .assets.status import local_asset_paths
 from .cache_dir import plugin_cache_dir
 from .window_title import with_library_suffix
 
+_MAIN_WINDOW_TITLE = f"KiCad Library Manager — v{__version__}"
+
 
 def _ui_trace_log(msg: str) -> None:
     """
@@ -82,7 +85,7 @@ class MainDialog(wx.Frame):
     def __init__(self, parent: wx.Window | None, repo_path: str, project_path: str = ""):
         super().__init__(
             parent,
-            title=with_library_suffix("KiCad Library Manager", repo_path),
+            title=with_library_suffix(_MAIN_WINDOW_TITLE, repo_path),
             style=wx.DEFAULT_FRAME_STYLE | wx.RESIZE_BORDER | wx.MAXIMIZE_BOX,
         )
         self._repo_path = repo_path
@@ -463,7 +466,7 @@ class MainDialog(wx.Frame):
         Refresh UI + background loops depending on whether repo is initialized.
         """
         try:
-            self.SetTitle(with_library_suffix("KiCad Library Manager", self._repo_path, cfg=getattr(self, "_cfg", None)))
+            self.SetTitle(with_library_suffix(_MAIN_WINDOW_TITLE, self._repo_path, cfg=getattr(self, "_cfg", None)))
         except Exception:
             pass
         ready, reason = self._repo_ready()
